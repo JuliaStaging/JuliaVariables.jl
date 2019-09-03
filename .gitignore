@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 *.jl.*.cov
 *.jl.cov
 *.jl.mem
@@ -6,3 +7,9 @@
 /dev/
 /docs/build/
 /docs/site/
+=======
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+deps/deps.jl
+>>>>>>> 6532e28e5c8791cff0f7f6c46e0250c84adc6439
