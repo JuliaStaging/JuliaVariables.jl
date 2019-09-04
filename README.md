@@ -19,7 +19,10 @@ and then replace
 For more details, check the implementation of [NameResolution.jl](https://github.com/thautwarm/NameResolution.jl).
 
 
-**ATTENTION!!!** : `solve` works when it accepts a Julia surface AST containing no `macrocall` expressions.
+**ATTENTION!!!** :
+
+`solve` will give up analysing when meeting `macrocall` expressions. You can expand them before using
+`solve`.
 
 Usage
 ==========
@@ -48,6 +51,18 @@ func = solve(:(function f(x)
     end
 end))
 println(func |> rmlines)
+
+
+func = solve(
+    macroexpand(@__MODULE__,:(
+    @inline function f(x)
+        y = x + 1
+        let y = y + 1
+            (x + y  + z for z in 1:10)
+        end
+    end
+)))
+println(func |> rmlines)
 ```
 
 =>
@@ -58,16 +73,27 @@ println(func |> rmlines)
         @y
     end
 end
+
 []function (f)(@x)
     @cell y = (@global +)(@x, 1)
     [cell y]@z->begin
         (@global +)(@z, @cell y)
     end
 end
+
 []function (f)(@cell x)
     @y = (@global +)(@cell x, 1)
     let @cell y = (@global +)(@cell y, 1)
         [cell y,cell x]((@global +)(@cell x, @cell y, @z) for @z = (@global :)(1, 10))
     end
 end
+
+[]function (f)(@cell x)
+    $(Expr(:meta, @global inline))
+    @y = (@global +)(@cell x, 1)
+    let @cell y = (@global +)(@cell y, 1)
+        [cell y,cell x]((@global +)(@cell x, @cell y, @z) for @z = (@global :)(1, 10))
+    end
+end
+
 ```

@@ -27,6 +27,16 @@ JuliaVariables.@quick_lambda begin
     end))
     println(func |> rmlines)
 
+    func = solve(
+        macroexpand(@__MODULE__,:(
+        @inline function f(x)
+            y = x + 1
+            let y = y + 1
+                (x + y  + z for z in 1:10)
+            end
+        end
+    )))
+    println(func |> rmlines)
     # @test map(haskey(func.scope.freevars, _), [])
 
     # Write your own tests here.

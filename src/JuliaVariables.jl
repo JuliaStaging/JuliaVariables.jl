@@ -186,6 +186,9 @@ end
 
 function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
     @match ex begin
+# give up analysing macrocall expressions.
+        Expr(:macrocall, _...) => ex
+# scoped constructs
         Expr(hd && if hd in (:function, :(=), :->) end, a,  b) =>
             begin
                 is_fn = is_func_sym(hd)
