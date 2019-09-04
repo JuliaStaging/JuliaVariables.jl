@@ -3,9 +3,10 @@ import LegibleLambdas
 using MLStyle
 using NameResolution
 
-export Scope, solve, ScopedVar, ScopedFunc, ScopedGenerator
-const DEBUG = false
-@static if DEBUG
+export Scope, ScopedVar, ScopedFunc, ScopedGenerator
+export solve_from_local, solve
+const DEBUG = true
+# @static if DEBUG
 macro logger(call)
     @when :($f($ana, $(args...))) = call begin
         :($f($ana, $(args...)) = begin
@@ -19,7 +20,7 @@ end
 @logger require!(ana, sym)
 @logger is_local!(ana, sym)
 @logger is_global!(ana, sym)
-end
+# end
 @generated function field_update(main :: T, field::Val{Field}, value) where {T, Field}
     fields = fieldnames(T)
     quote
@@ -308,6 +309,13 @@ function solve(ex)
     ex = solve(ana, ex)
     anas = [(@with child parent nothing) for child in ana.children]
     foreach(run_analyzer, anas)
+    ex
+end
+
+function solve_from_local(ex)
+    ana = top_analyzer()
+    ex = solve(ana, ex)
+    run_analyzer(ana)
     ex
 end
 

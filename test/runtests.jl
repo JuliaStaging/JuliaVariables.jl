@@ -39,6 +39,10 @@ JuliaVariables.@quick_lambda begin
     println(func |> rmlines)
     # @test map(haskey(func.scope.freevars, _), [])
 
+    func = solve_from_local(quote
+        a -> a + z
+    end)
+    println(func |> rmlines)
     # Write your own tests here.
 end
 end
