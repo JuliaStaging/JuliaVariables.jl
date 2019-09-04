@@ -5,8 +5,8 @@ using NameResolution
 
 export Scope, ScopedVar, ScopedFunc, ScopedGenerator
 export solve_from_local, solve
-const DEBUG = true
-# @static if DEBUG
+const DEBUG = false
+@static if DEBUG
 macro logger(call)
     @when :($f($ana, $(args...))) = call begin
         :($f($ana, $(args...)) = begin
@@ -20,7 +20,7 @@ end
 @logger require!(ana, sym)
 @logger is_local!(ana, sym)
 @logger is_global!(ana, sym)
-# end
+end
 @generated function field_update(main :: T, field::Val{Field}, value) where {T, Field}
     fields = fieldnames(T)
     quote
