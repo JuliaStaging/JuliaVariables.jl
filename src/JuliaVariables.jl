@@ -1,17 +1,88 @@
 module JuliaVariables
-using LegibleLambdas
+import LegibleLambdas
 using MLStyle
 using NameResolution
 
-export ScopedVal, Scope, solve
+export Scope, solve, ScopedVar, ScopedFunc, ScopedGenerator
+const DEBUG = false
+@static if DEBUG
+macro logger(call)
+    @when :($f($ana, $(args...))) = call begin
+        :($f($ana, $(args...)) = begin
+            println($(QuoteNode(f)),'(', $string($objectid($ana), base=62), ",", $(args...), ')')
+            $NameResolution.$f($ana, $(args...))
+        end)
+    end
+end
+@logger child_analyzer!(ana, is_physical)
+@logger enter!(ana, sym)
+@logger require!(ana, sym)
+@logger is_local!(ana, sym)
+@logger is_global!(ana, sym)
+end
+@generated function field_update(main :: T, field::Val{Field}, value) where {T, Field}
+    fields = fieldnames(T)
+    quote
+        $T($([field !== Field ? :(main.$field) : :value for field in fields]...))
+    end
+end
 
-struct ScopedVal
+macro with(main, field::Symbol, value)
+    :($field_update($main, $(Val(field)), $value)) |> esc
+end
+
+struct ScopedVar
     scope :: Scope
     sym   :: Symbol
 end
 
-Base.show(io::IO, scopedval::ScopedVal) =
-    Base.print(io, string(objectid(scopedval.scope), base=60), "@", scopedval.sym)
+struct ScopedFunc
+    scope :: Scope
+    func  :: Expr
+end
+
+struct ScopedGenerator
+    scope :: Scope
+    gen  :: Expr
+end
+
+function var_repr(var :: LocalVar)
+    r = ""
+    if var.is_mutable.x
+        r *= "mut "
+    end
+    if var.is_shared.x
+        r *= "cell "
+    end
+    r * string(var.sym)
+end
+function var_repr(var :: GlobalVar)
+    "global $var"
+end
+
+function Base.show(io::IO, scopedvar::ScopedVar)
+    scope = scopedvar.scope
+    sym = scopedvar.sym
+    if isempty(scope.bounds) && isempty(scope.freevars)
+        Base.print(io, sym)
+        return
+    end
+    var = var_repr(scope[sym])
+    Base.print(io, "@", var)
+end
+
+function Base.show(io::IO, o::ScopedFunc)
+    scope = o.scope
+    func = o.func
+    Base.print(io, "[", join(map(var_repr, values(scope.freevars) |> collect), ",") , "]", func)
+end
+
+function Base.show(io::IO, o::ScopedGenerator)
+    scope = o.scope
+    gen = o.gen
+    Base.print(io, "[", join(map(var_repr, values(scope.freevars) |> collect), ",") , "]", gen)
+end
+
 
 islinenumbernode(x) = x isa LineNumberNode
 rmlines(ex::Expr) = begin
@@ -19,6 +90,17 @@ rmlines(ex::Expr) = begin
     tl = map(rmlines, filter(!islinenumbernode, ex.args))
     Expr(hd, tl...)
 end
+
+rmlines(ex::ScopedFunc) = begin
+    func = ex.func |> rmlines
+    @with ex func func
+end
+
+rmlines(ex::ScopedGenerator) = begin
+    gen = ex.gen |> rmlines
+    @with ex gen gen
+end
+
 rmlines(a) = a
 
 function quick_lambda(ex)
@@ -28,7 +110,7 @@ function quick_lambda(ex)
         args = Any[arg === :_ ? quick_arg : quick_lambda(arg)
                    for arg in args]
         ex = Expr(:call, args...)
-        :(function $λ($quick_arg) $ex end)
+        :($LegibleLambdas.@λ($quick_arg -> $ex))
     @when Expr(hd, args...) = ex
         Expr(hd, map(quick_lambda, args)...)
     @otherwise
@@ -87,7 +169,7 @@ Base.@pure Base.:+(flag :: CtxFlag, desc :: Symbol) =
 CtxFlag() = CtxFlag(Lexical(), false)
 
 function solve(ana, sym :: Symbol, ctx_flag::CtxFlag)
-    @when Force(is_local) = ctx_flag begin
+    @when Force(is_local) = ctx_flag.default_scope begin
         if is_local
             is_local!(ana, sym)
         else
@@ -99,7 +181,7 @@ function solve(ana, sym :: Symbol, ctx_flag::CtxFlag)
     else
         require!(ana, sym)
     end
-    ScopedVal(ana.solved.x, sym)
+    ScopedVar(ana.solved, sym)
 end
 
 function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
@@ -112,36 +194,37 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                     !(name isa Symbol) && return name
                     solve(ana, name, ctx_flag + :lhs)
                 end
+                is_fn = is_fn || hd !== :(=)
                 ana = if is_fn
-                    child_analyzer!(ana)
+                    child_analyzer!(ana, true)
                 else
                     ana
                 end
                 a = solve(ana, a, ctx_flag + :lhs + :local)
                 b = solve(ana, b, CtxFlag())
-                Expr(hd, a, b)
+                func = Expr(hd, a, b)
+                is_fn ? ScopedFunc(ana.solved, func) : func
             end
         Expr(hd && if hd in (:for, :while) end, a, b) =>
             begin ctx_flag = CtxFlag()
-                ana      = child_analyzer!(ana)
+                ana = child_analyzer!(ana, false)
                 a   = solve(ana, a, ctx_flag + :lhs + :local)
                 b   = solve(ana, b, ctx_flag)
                 Expr(hd, a, b)
             end
         Expr(:try, attempt, a, blocks...) =>
             @quick_lambda begin ctx_flag = CtxFlag()
-                attempt = solve(child_analyzer!(ana), attempt, ctx_flag)
-                a       = solve(child_analyzer!(ana), a, ctx_flag + :lhs) # catch exc
-                blocks  = map(solve(child_analyzer!(ana), _, ctx_flag), blocks)
+                attempt = solve(child_analyzer!(ana, false), attempt, ctx_flag)
+                a       = solve(child_analyzer!(ana, false), a, ctx_flag + :lhs) # catch exc
+                blocks  = map(solve(child_analyzer!(ana, false), _, ctx_flag), blocks)
                 Expr(:try, attempt, a, blocks...)
             end
         Expr(:let, Expr(:block, binds...) || bind && Do(binds = [bind]), a) =>
             begin ctx_flag = CtxFlag() + :lhs + :local
-                @info :let "???"
                 cur_scope = ana
                 binds = map(binds) do each
                     if !isa(each, LineNumberNode)
-                        cur_scope = child_analyzer!(cur_scope)
+                        cur_scope = child_analyzer!(cur_scope, false)
                         solve(cur_scope, each, ctx_flag)
                     else
                         each
@@ -159,10 +242,10 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
             end
         Expr(:generator, expr, binds...) =>
             @quick_lambda begin ctx_flag = CtxFlag()
-                ana = child_analyzer!(ana)
+                ana = child_analyzer!(ana, true)
                 binds = map(solve(ana, _, ctx_flag + :lhs + :local), binds)
                 expr = solve(ana, expr, ctx_flag)
-                Expr(:generator, expr, binds...)
+                ScopedGenerator(ana.solved, Expr(:generator, expr, binds...))
             end
         Expr(:filter, cond, binds...) =>
             @quick_lambda begin
@@ -190,7 +273,7 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
         :($a where {$(tps...)}) =>
             @quick_lambda begin
                 if !ctx_flag.is_lhs && !isempty(tps)
-                    ana = child_analyzer!(ana)
+                    ana = child_analyzer!(ana, false)
                     ctx_flag = CtxFlag()
                     tps = map(solve(ana, _, ctx_flag + :lhs), tps)
                 end
@@ -203,6 +286,8 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                 b = solve(ana, b, CtxFlag())
                 :($a :: $b)
             end
+        Expr(hd && if hd in (:module, :baremodule) end, args...) =>
+           @quick_lambda Expr(hd, map(solve(ana, _, ctx_flag), args)...)
         Expr(hd, args...) =>
             @quick_lambda begin
                 if is_rhs_sym(hd)
@@ -217,7 +302,10 @@ end
 
 function solve(ex)
     ana = top_analyzer()
-    ana, solve(ana, ex)
+    ex = solve(ana, ex)
+    anas = [(@with child parent nothing) for child in ana.children]
+    foreach(run_analyzer, anas)
+    ex
 end
 
 end # module

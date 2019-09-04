@@ -2,14 +2,33 @@ using JuliaVariables
 using Test
 using NameResolution
 
+rmlines = JuliaVariables.rmlines
+JuliaVariables.@quick_lambda begin
 @testset "JuliaVariables.jl" begin
-    ana, ex = solve(:(function f(x)
+    func = solve(:(function f(x)
         let y = x + 1
             y
         end
     end))
-    run_analyzer(ana)
-    println(ana.children[1])
-    println(ex)
+    println(func |> rmlines)
+
+    func = solve(:(function f(x)
+        y = x + 1
+        z -> z + y
+    end))
+
+    println(func |> rmlines)
+
+    func = solve(:(function f(x)
+        y = x + 1
+        let y = y + 1
+            (x + y  + z for z in 1:10)
+        end
+    end))
+    println(func |> rmlines)
+
+    # @test map(haskey(func.scope.freevars, _), [])
+
     # Write your own tests here.
+end
 end
