@@ -6,8 +6,27 @@
 [![Codecov](https://codecov.io/gh/thautwarm/JuliaVariables.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/thautwarm/JuliaVariables.jl)
 
 
+About
+=============
+
+The `solve` function will solve the scopes of a given AST,
+and then replace
+
+- all variable symbols with `ScopedVar(::Scope, ::Symbol)`,
+- all function definitions with `ScopedFunc(::Scope, ::Expr)`,
+- all generators with `ScopedGenerator(::Scope, ::Expr)`
+
+For more details, check the implementation of [NameResolution.jl](https://github.com/thautwarm/NameResolution.jl).
+
+
+**ATTENTION!!!** : `solve` works when it accepts a Julia surface AST containing no `macrocall` expressions.
+
+Usage
+==========
+
 ```julia
 using JuliaVariables
+rmlines = JuliaVariables
 func = solve(:(function f(x)
     let y = x + 1
         y
