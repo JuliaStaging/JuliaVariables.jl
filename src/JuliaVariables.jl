@@ -286,6 +286,8 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                     ana = child_analyzer!(ana, false)
                     ctx_flag = CtxFlag()
                     tps = map(solve(ana, _, ctx_flag + :lhs), tps)
+                else
+                    tps = map(solve(ana, _, ctx_flag + :arg), tps)
                 end
                 a = solve(ana, a, ctx_flag)
                 :($a where {$(tps...)})

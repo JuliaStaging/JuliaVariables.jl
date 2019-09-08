@@ -52,5 +52,11 @@ JuliaVariables.@quick_lambda begin
     end)
     println(func |> rmlines)
     # Write your own tests here.
+
+    a = solve(:(function k(x::T) where T
+                  :(1, T)
+              end
+    ))
+    @test haskey(a.scope.bounds, :T)
 end
 end
