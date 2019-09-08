@@ -1,7 +1,7 @@
 name = "JuliaVariables"
 uuid = "b14d175d-62b4-44ba-8fb7-3064adc8c3ec"
 authors = ["thautwarm"]
-version = "0.1.0"
+version = "0.1.1"
 
 [deps]
 LegibleLambdas = "f1f30506-32fe-5131-bd72-7c197988f9e5"
