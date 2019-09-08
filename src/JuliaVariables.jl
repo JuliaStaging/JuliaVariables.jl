@@ -305,7 +305,7 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                     @when Expr(:(=), k::Symbol, v) = arg begin
                         Expr(:(=), k, solve(ana, v, ctx_flag))
                     @otherwise
-                        solve(ana, v, ctx_flag)
+                        solve(ana, arg, ctx_flag)
                     end
                 end
                 Expr(:tuple, args...)
