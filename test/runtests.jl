@@ -43,6 +43,14 @@ JuliaVariables.@quick_lambda begin
         a -> a + z
     end)
     println(func |> rmlines)
+
+    func = solve_from_local(quote
+    q = a
+    function z(x, k=1)
+        (x=x, k=k, q=q)
+    end
+    end)
+    println(func |> rmlines)
     # Write your own tests here.
 end
 end

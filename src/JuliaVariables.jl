@@ -144,7 +144,9 @@ is_rhs_sym(sym) = begin
 end
 
 @data ScopeDesc begin
-    Force(is_local :: Bool)
+    Local()
+    Global()
+    Arg()
     Lexical()
 end
 
@@ -158,8 +160,9 @@ Base.@pure Base.:+(flag :: CtxFlag, desc :: Symbol) =
     @when CtxFlag(default_scope=default_scope, is_lhs=is_lhs) = flag begin
         @match desc begin
             :lexical => CtxFlag(Lexical(), is_lhs)
-            :global  => CtxFlag(Force(false), is_lhs)
-            :local   => CtxFlag(Force(true), is_lhs)
+            :global  => CtxFlag(Global(), is_lhs)
+            :local   => CtxFlag(Local(), is_lhs)
+            :arg     => CtxFlag(Arg(), is_lhs)
             :lhs     => CtxFlag(default_scope, true)
             :rhs     => CtxFlag(default_scope, false)
         end
@@ -170,19 +173,22 @@ Base.@pure Base.:+(flag :: CtxFlag, desc :: Symbol) =
 CtxFlag() = CtxFlag(Lexical(), false)
 
 function solve(ana, sym :: Symbol, ctx_flag::CtxFlag)
-    @when Force(is_local) = ctx_flag.default_scope begin
-        if is_local
-            is_local!(ana, sym)
-        else
-            is_global!(ana, sym)
-        end
+    default_scope = ctx_flag.default_scope
+    @when Global() = default_scope begin
+        is_global!(ana, sym)
+    @when Local() || Arg() = default_scope
+        is_local!(ana, sym)
     end
     if ctx_flag.is_lhs
         enter!(ana, sym)
     else
         require!(ana, sym)
     end
-    ScopedVar(ana.solved, sym)
+    if Arg() == default_scope
+        sym
+    else
+        ScopedVar(ana.solved, sym)
+    end
 end
 
 function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
@@ -204,7 +210,7 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                 else
                     ana
                 end
-                a = solve(ana, a, ctx_flag + :lhs + :local)
+                a = solve(ana, a, ctx_flag + :lhs + :arg)
                 b = solve(ana, b, CtxFlag())
                 func = Expr(hd, a, b)
                 is_fn ? ScopedFunc(ana.solved, func) : func
@@ -224,7 +230,7 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                 Expr(:try, attempt, a, blocks...)
             end
         Expr(:let, Expr(:block, binds...) || bind && Do(binds = [bind]), a) =>
-            begin ctx_flag = CtxFlag() + :lhs + :local
+            begin ctx_flag = CtxFlag() + :lhs + :arg
                 cur_scope = ana
                 binds = map(binds) do each
                     if !isa(each, LineNumberNode)
@@ -265,13 +271,13 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
             end
         Expr(:local, args...) =>
             @quick_lambda  begin
-                args = map(solve(ana, _, ctx_flag + :local), args)
+                args = map(solve(ana, _, ctx_flag + :arg), args)
                 Expr(:local, args...)
             end
         Expr(:global, args...) =>
             @quick_lambda  begin
                 args = map(solve(ana, _, ctx_flag + :global), args)
-                Expr(:local, args...)
+                Expr(:global, args...)
             end
 # non-scoped constructs
         :($a where {$(tps...)}) =>
@@ -292,6 +298,18 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
             end
         Expr(hd && if hd in (:module, :baremodule) end, args...) =>
            @quick_lambda Expr(hd, map(solve(ana, _, ctx_flag), args)...)
+# namedtuple
+# https://github.com/thautwarm/GG.jl/issues/8
+        Expr(:tuple, args...) =>
+            let args = map(args) do arg
+                    @when Expr(:(=), k::Symbol, v) = arg begin
+                        Expr(:(=), k, solve(ana, v, ctx_flag))
+                    @otherwise
+                        solve(ana, v, ctx_flag)
+                    end
+                end
+                Expr(:tuple, args...)
+            end
         Expr(hd, args...) =>
             @quick_lambda begin
                 if is_rhs_sym(hd)
