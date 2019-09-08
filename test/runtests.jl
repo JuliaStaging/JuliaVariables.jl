@@ -58,5 +58,9 @@ JuliaVariables.@quick_lambda begin
               end
     ))
     @test haskey(a.scope.bounds, :T)
+
+
+    a = solve(:(2 .^ [2, 3]))
+    @test eval(a) == [4, 8]
 end
 end

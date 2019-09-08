@@ -139,6 +139,11 @@ is_broadcast_fusing(sym) = begin
     endswith(s, "=") && startswith(s, ".")
 end
 
+is_broadcast_sym(sym) = begin
+    s = string(sym)
+    startswith(s, ".") && Base.isoperator(Symbol(s[1:end]))
+end
+
 is_rhs_sym(sym) = begin
     (sym in Symbol[:ref, :.])
 end
@@ -311,6 +316,15 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                     end
                 end
                 Expr(:tuple, args...)
+            end
+# keyword arguments for tuples or calls
+        Expr(:kw, k::Symbol, v) => Expr(:kw, k, solve(ana, v, ctx_flag + :rhs))
+# broadcasting symbols
+        Expr(:call, f :: Symbol, args...) &&
+            if length(args) in (1, 2) && is_broadcast_sym(f)
+            end =>
+            @quick_lambda let args = map(solve(ana, _, ctx_flag), args)
+                Expr(:call, f, args...)
             end
         Expr(hd, args...) =>
             @quick_lambda begin
