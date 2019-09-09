@@ -29,7 +29,7 @@ Usage
 
 ```julia
 using JuliaVariables
-rmlines = JuliaVariables
+rmlines = JuliaVariables.rmlines
 func = solve(:(function f(x)
     let y = x + 1
         y
