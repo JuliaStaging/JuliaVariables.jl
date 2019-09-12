@@ -1,6 +1,7 @@
 using JuliaVariables
 using Test
 using NameResolution
+using MLStyle
 
 rmlines = JuliaVariables.rmlines
 JuliaVariables.@quick_lambda begin
@@ -62,5 +63,23 @@ JuliaVariables.@quick_lambda begin
 
     a = solve(:(2 .^ [2, 3]))
     @test eval(a) == [4, 8]
+
+    a = solve(:(function z(x, k=1)
+                   x + 20 + a + k
+               end
+    ))
+    @test haskey(a.scope.bounds, :k)
+
+    a = solve(:(function z(x, k=1)
+                   (k=k, )
+               end
+    ))
+    @test haskey(a.scope.bounds, :k)
+
+    @test @when :(k=$_, )  = a.func.args[2].args[2] begin
+        true
+    @otherwise
+        false
+    end
 end
 end

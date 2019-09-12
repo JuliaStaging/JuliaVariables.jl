@@ -318,7 +318,13 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                 Expr(:tuple, args...)
             end
 # keyword arguments for tuples or calls
-        Expr(:kw, k::Symbol, v) => Expr(:kw, k, solve(ana, v, ctx_flag + :rhs))
+        Expr(:kw, k::Symbol, v) =>
+            begin
+                if ctx_flag.default_scope == Arg()
+                    solve(ana, k, ctx_flag)
+                end
+                Expr(:kw, k, solve(ana, v, ctx_flag + :rhs))
+            end
 # broadcasting symbols
         Expr(:call, f :: Symbol, args...) &&
             if length(args) in (1, 2) && is_broadcast_sym(f)
