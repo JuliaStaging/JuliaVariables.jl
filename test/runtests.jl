@@ -94,5 +94,16 @@ JuliaVariables.@quick_lambda begin
     @test haskey(func.scope.bounds, :z)
     @test func.scope.bounds[:z].is_mutable.x
 
+
+    func = solve(macroexpand(@__MODULE__, :(@inline function (x)
+              z = x + 1
+              @inline function (y)
+                  z += 1
+                  z
+              end
+          end)))
+    println(func |> rmlines)
+
+
 end
 end

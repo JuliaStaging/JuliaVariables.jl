@@ -101,6 +101,25 @@ end
 
 rmlines(a) = a
 
+function no_ana(ex)
+    @match ex begin
+        # inline
+        Expr(:meta, _...)          ||
+        # @label, @goto
+        Expr(:symboliclabel, _...) ||
+        Expr(:symbolicgoto, _...)  ||
+        # @inbounds
+        Expr(:inbounds, _...)      ||
+        # @generated
+        Expr(:generated, _...)     ||
+        # @ boundscheck
+        Expr(:boundscheck, _...)   ||
+        # @locals
+        Expr(:locals) => true
+        _ => false
+    end
+end
+
 function quick_lambda(ex)
     @when Expr(:call, args...) && if any(==(:_), args) end = ex begin
         quick_arg = gensym("quick_arg")
@@ -189,7 +208,8 @@ function solve(ana, sym :: Symbol, ctx_flag::CtxFlag)
     ScopedVar(ana.solved, sym)
 end
 
-function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
+function solve(ana, ex::Expr, ctx_flag::CtxFlag)
+    no_ana(ex) && return ex
     @match ex begin
 # give up analysing macrocall expressions.
         Expr(:macrocall, _...) => ex
@@ -341,8 +361,15 @@ function solve(ana, ex, ctx_flag::CtxFlag = CtxFlag())
                 args = map(solve(ana, _, ctx_flag), args)
                 Expr(hd, args...)
             end
-        a => a
     end
+end
+
+function solve(ana, ex, ctx_flag::CtxFlag)
+    ex
+end
+
+function solve(ana, ex)
+    solve(ana, ex, CtxFlag())
 end
 
 function solve(ex)
