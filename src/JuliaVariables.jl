@@ -112,8 +112,10 @@ function no_ana(ex)
         Expr(:inbounds, _...)      ||
         # @generated
         Expr(:generated, _...)     ||
-        # @ boundscheck
+        # @boundscheck
         Expr(:boundscheck, _...)   ||
+        # @isdefined
+        Expr(:isdefined, _...)     ||
         # @locals
         Expr(:locals) => true
         _ => false
