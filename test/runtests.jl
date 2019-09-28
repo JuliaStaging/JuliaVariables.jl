@@ -81,5 +81,18 @@ JuliaVariables.@quick_lambda begin
     @otherwise
         false
     end
+
+    func = solve(:(function (x)
+              z = x + 1
+              y -> begin
+                  z += 1
+                  z
+              end
+          end))
+
+    println(func |> rmlines)
+    @test haskey(func.scope.bounds, :z)
+    @test func.scope.bounds[:z].is_mutable.x
+
 end
 end
