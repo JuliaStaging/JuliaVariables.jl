@@ -101,6 +101,9 @@ end
 
 rmlines(a) = a
 
+"""
+Check if an AST needs no analysis.
+"""
 function no_ana(ex)
     @match ex begin
         # inline
@@ -122,6 +125,11 @@ function no_ana(ex)
     end
 end
 
+
+"""
+Transform quick lambdas, e.g.,
+     `f(_ + 1)` -> `f(x -> x + 1)`
+"""
 function quick_lambda(ex)
     @when Expr(:call, args...) && if any(==(:_), args) end = ex begin
         quick_arg = gensym("quick_arg")
@@ -141,6 +149,16 @@ macro quick_lambda(ex)
     esc(quick_lambda(ex))
 end
 
+"""
+The function header can be one of following shapes:
+    - `Expr(:call, f, args...)``
+    - `a where args...`
+    - `a :: t`
+    - the actual function name:
+        - a `Symbol` for function name, or
+        - structure call overloading `(instance::Type)`, or
+        - a dotted name `modulename.field`
+"""
 function with_fname(cont, ex)
     @match ex begin
         Expr(:call, f, args...) => Expr(:call, cont(f), args...)
