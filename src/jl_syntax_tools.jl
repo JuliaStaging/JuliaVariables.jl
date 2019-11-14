@@ -79,4 +79,5 @@ function func_header(@nospecialize(ex))::FuncHeader
         f => FuncHeader(f, unset, unset, unset)
     end
 end
+
 end
