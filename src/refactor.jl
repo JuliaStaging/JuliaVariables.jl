@@ -18,32 +18,46 @@ find_line(e::LineNumberNode) = e
 find_line(_) = nothing
 error_ex(sym::Symbol, ex) =
     begin line = find_line(ex)
-        loc_msg === nothing ? "" : "$line :"
-        error("$(locmsg)Malformed or non-canonicalized $sym expression")
-    end
+    locmsg = line === nothing ? "" : "$line: "
+    error("$(locmsg)Malformed or non-canonicalized $sym expression")
+end
 
 
 @enum Ctx C_LOCAL C_GLOBAL C_LEXICAL
 struct State
-    ana :: Analyzer
-    ctx :: Ctx
+    ana::Analyzer
+    ctx::Ctx
     bound_inits::Set{Symbol}
 end
 State(ana::Analyzer, ctx::Ctx) = State(ana, ctx, Set{Symbol}())
 
 mutable struct SymRef
-    sym        :: Symbol
-    scope      :: Union{Nothing, Scope}
-    as_non_sym :: Bool
+    sym::Symbol
+    scope::Union{Nothing,Scope}
+    as_non_sym::Bool
     # as_non_sym = true : like for a key of namedtuples or argument keywords
 end
 
-SymRef(sym::Symbol, scope::Union{Nothing, Scope}) = SymRef(sym, scope, false)
+SymRef(sym::Symbol, scope::Union{Nothing,Scope}) = SymRef(sym, scope, false)
+
+struct Var
+    name::Symbol
+    is_mutable::Bool
+    is_shared::Bool
+    is_global::Bool
+end
+
+function Base.show(io::IO, var::Var)
+    var.is_global && return print(io, "@global ", var.name)
+    mut = var.is_mutable ? "mut " : ""
+    var.is_shared && return print(io,  "$(mut)@shared ", var.name)
+    print(io,  "$(mut)@local ", var.name)
+end
 
 @sig struct Scoper
-    S :: Ref{State}
-    ScopeInfo :: IdDict{Any, Any}
-    rule :: Function
+    S::Ref{State}
+    ScopeInfo::IdDict{Expr,Any}
+    transform::Function
 end
 
 macro _symref_func(N, n)
@@ -63,7 +77,7 @@ end
 
 scoper() = @structure struct Scoper
     S = Ref(State(top_analyzer(), C_LEXICAL, Set{Symbol}()))
-    ScopeInfo = IdDict{Any, Any}()
+    ScopeInfo = IdDict{Expr,Any}()
     PHYSICAL = true
     PSEUDO = false
     IS_BOUND_INIT = Ref(false)
@@ -80,7 +94,7 @@ scoper() = @structure struct Scoper
             sym.as_non_sym = true
             push!(st.bound_inits, sym.sym)
         end
-        # REQUIRE!.([st.ana], syms)
+        REQUIRE!.([st.ana], syms)
     end
 
     function RHS(st::State, ex)
@@ -156,6 +170,10 @@ scoper() = @structure struct Scoper
     LOCAL_LHS(ex) = LOCAL_LHS(S[], ex)
     @specialize
 
+    function IS_SCOPED(st::State, ex::Expr)
+        ScopeInfo[ex] =(st.ana.solved.bounds, st.ana.solved.freevars, st.bound_inits)
+    end
+
     rule(_) = SymRef[]
     rule(sym::Symbol) =
         error("An immutable Symbol cannot be analyzed. Transform them to SymRefs.")
@@ -168,17 +186,18 @@ scoper() = @structure struct Scoper
             LOCAL_LHS(S₁, a)
             RHS(S₁, body)
             S[] = S₀
-            SymRef[]
+            IS_SCOPED(S₁, body)
+        SymRef[]
 
         @when Expr(:let, a::Symbol, body) = ex
             S₀ = S[]
             S₁ = CHILD(S₀, PSEUDO)
             LOCAL_LHS(S₁, a)
-            RHS(S₁, body)
+        RHS(S₁, body)
+            IS_SCOPED(S₁, body)
             S[] = S₀; SymRef[]
 
         @when Expr(:let, seq, body) = ex
-
             error_ex(:let, seq)
 
         @when Expr(:function, header, body) = ex
@@ -186,16 +205,17 @@ scoper() = @structure struct Scoper
             S₀ = S[]
             S₁ = CHILD(S₀, PSEUDO)
             S₂ = CHILD(S₁, PHYSICAL)
-            ScopeInfo[ex] = (S₀.ana.solved, S₀.bound_inits)
+            IS_SCOPED(S₂, body)
 
             # check type parameters
             @when :($left_ where {$(freshes...)}) = left begin
                 S[] = S₁
                 for decl in freshes
-                    @match decl begin
-                        :($a >: $b) || :($a <: $b) => begin LOCAL_LHS(a); RHS(b) end
+                        @match decl begin
+                        :($a >: $b) || :($a <: $b) => begin LOCAL_LHS(a); LOCAL_LHS(S₂, a); RHS(b) end
                         :($a >: $b >: $c) ||
-                        :($a <: $b <: $c) => begin RHS(a); LOCAL_LHS(b); RHS(c) end
+                        :($a <: $b <: $c) => begin RHS(a); LOCAL_LHS(b); LOCAL_LHS(S₂, b); RHS(c) end
+                        ::SymRef => begin LOCAL_LHS(decl); LOCAL_LHS(S₂, decl) end
                         _ => error_ex(:where, ex)
                     end
                 end
@@ -203,9 +223,9 @@ scoper() = @structure struct Scoper
             end
 
             # check return type
-            @when :($left_ :: $t) = left begin
-                RHS(S₁ , t)
-                left=left_;nothing
+            @when :($left_::$t) = left begin
+                RHS(S₁, t)
+                left = left_;nothing
             end
 
             # check function name
@@ -220,13 +240,12 @@ scoper() = @structure struct Scoper
             # check args
             function visit_arg(arg)
                 @nospecialize arg
-                @when :($arg_ = $default) ||
-                    Expr(:kw, arg_, default) = arg begin
+                @when (:($arg_ = $default) || Expr(:kw, arg_, default)) = arg begin
                     RHS(S₂, default)
                     arg = arg_
                 end
-                @when :($arg_ :: $t) = arg begin
-                    RHS(S₁, default)
+                @when :($arg_::$t) = arg begin
+                    RHS(S₁, t)
                     arg = arg_
                 end
                 LOCAL_LHS(S₂, arg)
@@ -244,7 +263,7 @@ scoper() = @structure struct Scoper
 
         @when Expr(:(=), lhs, rhs) = ex
             # assign is canonicalized, thus cannot be a function
-            @when Expr(:call, _...) = lhs begin error_ex(:(=), ex) end
+        @when Expr(:call, _...) = lhs begin error_ex(:(=), ex) end
             LHS(lhs)
             RHS(rhs)
             SymRef[]
@@ -269,9 +288,9 @@ scoper() = @structure struct Scoper
             rule(v)
 
         @when Expr(:for, :($i = $I), block) = ex
-
             S₀ = S[]
             S₁ = CHILD(S₀, pseudo)
+            IS_SCOPED(S₁, body)
             RHS(S₀, I)
             LOCAL_LHS(S₁, i)
             RHS(S₁, block)
@@ -280,12 +299,13 @@ scoper() = @structure struct Scoper
         @when Expr(:while, cond, body) = ex
             S₀ = S[]
             S₁ = CHILD(S₀, pseudo)
+            IS_SCOPED(S₁, body)
             RHS(S₀, cond)
             RHS(S₁, body)
             SymRef[]
 
         @when Expr(:local, args...) = ex
-            WITH_STATE() do
+                WITH_STATE() do
                 LOCAL()
                 for arg in args
                     syms = rule(arg)
@@ -310,6 +330,9 @@ scoper() = @structure struct Scoper
             end
             syms
         end
+
+function local_var_to_var(var::LocalVar)::Var
+    Var(var.sym, var.is_mutable[], var.is_shared[], false)
 end
 
 function to_symref(ex::Expr)
@@ -321,8 +344,8 @@ function to_symref(ex::Expr)
 end
 
 function to_symref(s::Symbol)
-    SymRef(s, nothing)
-end
+        SymRef(s, nothing)
+        end
 
 to_symref(@nospecialize(l)) = l
 
@@ -331,47 +354,52 @@ function from_symref(ex::Expr)
     for i = 1:length(args)
         args[i] = from_symref(args[i])
     end
+    haskey(ScopeInfo, ex) && return begin
+        triple = ScopeInfo[ex]
+        scope_info = (
+            bounds = Var[local_var_to_var(v) for (_, v) = triple[1]],
+            freevars = Var[local_var_to_var(v) for (_, v) = triple[2]],
+            bound_inits = triple[3]
+        )
+        Expr(:scoped, scope_info, ex)
+    end
     ex
-end
-
-struct Var
-    name::Symbol
-    is_mutable::Bool
-    is_shared::Bool
-    is_global::Bool
-end
-
-function Base.show(io::IO, var::Var)
-    var.is_global && return print(io, "@global ", var.name)
-    mut = var.is_mutable ? "mut " : ""
-    var.is_shared && return print(io,  "$(mut)@shared ", var.name)
-    print(io,  "$(mut)@local ", var.name)
 end
 
 function from_symref(s::SymRef)
     s.as_non_sym && return s.sym
     var = s.scope[s.sym]
     var isa Symbol && return Var(var, true, true, true)
-    Var(var.sym, var.is_mutable[], var.is_shared[], false)
+    local_var_to_var(var)
 end
 
 from_symref(s::Symbol) =
     error("An immutable Symbol cannot be analyzed. Transform them to SymRefs.")
 from_symref(l) = l
 
-ss = scoper()
+function transform(@nospecialize(ex))
+    ex = to_symref(ex)
+    rule(ex)
+    ana = S[].ana
+    run_analyzer(ana)
+    from_symref(ex)
+end
+
+end # module struct
+
+
+function solve(@nospecialize(ex))
+    scoper().transform(ex)
+end
+
+
 
 ex = quote
     y = 1
-    function f(x)
+    function f(x::Vector{T}) where T
+        println(T)
+        y = 1
         y + x
     end
 end
-
-ex = to_symref(ex)
-ss.rule(ex)
-ana = ss.S[].ana
-run_analyzer(ana)
-ex = from_symref(ex)
-
-println(ex)
+println(solve(ex))
