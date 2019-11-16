@@ -104,6 +104,26 @@ get_fn_body(ex) =
 
     @test any(x -> x.name == :k, get_fn_scope(a).bounds)
 
+     a = solve_from_local(quote
+            x  = 1
+            y  = 2
+            .^ = 2
+            function z()
+                   x .^ y
+            end
+    end)
+    scope = (
+        a.
+         # Expr(:scoped, _, body)
+        args[2].
+        # the 8(include linenos)-th stmt
+        args[8].
+        # Expr(:function, head, body)
+        args[2].
+        # Expr(:scoped, scope, _)
+        args[1]
+    )
+    @test length(scope.freevars) == 2
 
     a = solve(:(function z(x, k=1)
                    (k=k, )

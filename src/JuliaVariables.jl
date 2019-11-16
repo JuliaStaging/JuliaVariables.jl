@@ -257,16 +257,14 @@ function solve(ast; toplevel=true)
             RHS(rhs)
             SymRef[]
 
-
 # broadcasting symbols
         @when (
-            Expr(:call, f :: Symbol, lhs, rhs) &&
-                if length(args) in (1, 2) && is_broadcast_sym(f)
+            Expr(:call, f :: SymRef, args...) &&
+                if length(args) in (1, 2) && is_broadcast_sym(f.sym)
                 end
             ) = ex
-            for arg in args
-                RHS(arg)
-            end
+            f.as_non_sym = true
+            RHS.(args)
             Symbol[]
 # namedtuple
 # https://github.com/thautwarm/GG.jl/issues/8
@@ -475,6 +473,6 @@ function solve(ast; toplevel=true)
     transform(ast)
 end # module struct
 
-solve_from_local(@nospecialize(ex)) = solve(ex; toplevel=true)
+solve_from_local(@nospecialize(ex)) = solve(ex; toplevel=false)
 
 end # module
