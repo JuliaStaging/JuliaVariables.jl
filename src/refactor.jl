@@ -104,7 +104,7 @@ scoper() = @structure struct Scoper
 
     function LOCAL()
         s = S[]
-        S[] = State(s.ana, C_LOCAL)
+        S[] = State(s.ana, C_LOCAL, s.bound_inits)
         nothing
     end
 
@@ -115,7 +115,7 @@ scoper() = @structure struct Scoper
 
     function GLOBAL()
         s = S[]
-        S[] = State(s.ana, C_GLOBAL)
+        S[] = State(s.ana, C_GLOBAL, s.bound_inits)
         nothing
     end
 
@@ -359,7 +359,7 @@ function from_symref(ex::Expr)
         scope_info = (
             bounds = Var[local_var_to_var(v) for (_, v) = triple[1]],
             freevars = Var[local_var_to_var(v) for (_, v) = triple[2]],
-            bound_inits = triple[3]
+            bound_inits = Symbol[triple[3]...]
         )
         Expr(:scoped, scope_info, ex)
     end
@@ -375,11 +375,15 @@ end
 
 from_symref(s::Symbol) =
     error("An immutable Symbol cannot be analyzed. Transform them to SymRefs.")
+
 from_symref(l) = l
 
-function transform(@nospecialize(ex))
+function transform(@nospecialize(ex); topscope=true)
     ex = to_symref(ex)
     rule(ex)
+    if topscope
+        IS_SCOPED(S[], ex)
+    end
     ana = S[].ana
     run_analyzer(ana)
     from_symref(ex)
@@ -391,8 +395,6 @@ end # module struct
 function solve(@nospecialize(ex))
     scoper().transform(ex)
 end
-
-
 
 ex = quote
     y = 1
