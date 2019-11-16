@@ -57,3 +57,21 @@ The function execution has the scope `S/mk-type-params/inner` and,
 - `x` is LHS in `S/mk-type-params/inner`,
 - `default_value` is RHS in `S/mk-type-params/inner`,
 - `body` is RHS in `S/mk-type-params/inner`
+
+
+Except for
+- `Expr(:function, ::Symbol, Expr(:block, _...))` is a declaration
+
+## Let-Bindings
+
+```julia
+let a = b
+    c
+end
+```
+
+`S/let` is a pseudo scope.
+
+- `b` is RHS in `S`
+- `a` is LHS in `S/let`
+- `c` is RHS in `S/let`

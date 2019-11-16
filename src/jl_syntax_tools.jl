@@ -80,4 +80,21 @@ function func_header(@nospecialize(ex))::FuncHeader
     end
 end
 
+rmlines(ex::Expr) = begin
+    hd = ex.head
+    tl = map(rmlines, filter(!islinenumbernode, ex.args))
+    Expr(hd, tl...)
+end
+rmlines(@nospecialize(a)) = a
+islinenumbernode(@nospecialize(x)) = x isa LineNumberNode
+
+find_line(ex::Expr) = begin
+    for e in ex.args
+        l = find_line(e)
+        l !== nothing && return l
+    end
+end
+find_line(e::LineNumberNode) = e
+find_line(_) = nothing
+
 end
