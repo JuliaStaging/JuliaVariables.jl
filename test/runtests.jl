@@ -3,8 +3,39 @@ using Test
 using NameResolution
 using MLStyle
 
-rmlines = JuliaVariables.rmlines
-JuliaVariables.@quick_lambda begin
+rmlines(ex::Expr) = begin
+    hd = ex.head
+    tl = map(rmlines, filter(!islinenumbernode, ex.args))
+    Expr(hd, tl...)
+end
+rmlines(@nospecialize(a)) = a
+islinenumbernode(@nospecialize(x)) = x isa LineNumberNode
+
+
+get_fn_scope(ex) =
+    @match ex begin
+        Expr(
+            :scoped,
+            _,
+            Expr(:function, _,
+                Expr(:scoped, scope, _)
+            )
+        ) => scope
+        _ => error("malformed $ex")
+    end
+
+get_fn_body(ex) =
+    @match ex begin
+        Expr(
+            :scoped,
+            _,
+            Expr(:function, _,
+                Expr(:scoped, _, body)
+            )
+        ) => body
+        _ => error("malformed $ex")
+    end
+
 @testset "JuliaVariables.jl" begin
     func = solve(:(function f(x)
         let y = x + 1
@@ -23,7 +54,9 @@ JuliaVariables.@quick_lambda begin
     func = solve(:(function f(x)
         y = x + 1
         let y = y + 1
-            (x + y  + z for z in 1:10)
+            for z in 1:10
+                x + y + z
+            end
         end
     end))
     println(func |> rmlines)
@@ -58,25 +91,28 @@ JuliaVariables.@quick_lambda begin
                 (1, T)
               end
     ))
-    @test haskey(a.scope.bounds, :T)
 
+    @test any(x -> x.name == :T, get_fn_scope(a).bounds)
 
-    a = solve(:(2 .^ [2, 3]))
-    @test eval(a) == [4, 8]
+    # a = solve(:(2 .^ [2, 3]))
+    # @test eval(a) == [4, 8]
 
     a = solve(:(function z(x, k=1)
                    x + 20 + a + k
                end
     ))
-    @test haskey(a.scope.bounds, :k)
+
+    @test any(x -> x.name == :k, get_fn_scope(a).bounds)
+
 
     a = solve(:(function z(x, k=1)
                    (k=k, )
                end
     ))
-    @test haskey(a.scope.bounds, :k)
 
-    @test @when :(k=$_, )  = a.func.args[2].args[2] begin
+    @test any(x -> x.name == :k, get_fn_scope(a).bounds)
+
+    @test @when :(k=$_, ) = get_fn_body(a).args[2] begin
         true
     @otherwise
         false
@@ -91,9 +127,7 @@ JuliaVariables.@quick_lambda begin
           end))
 
     println(func |> rmlines)
-    @test haskey(func.scope.bounds, :z)
-    @test func.scope.bounds[:z].is_mutable.x
-
+    @test any(x -> x.name == :z && x.is_mutable, get_fn_scope(func).bounds)
 
     func = solve(macroexpand(@__MODULE__, :(@inline function (x)
               z = x + 1
@@ -104,6 +138,4 @@ JuliaVariables.@quick_lambda begin
           end)))
     println(func |> rmlines)
 
-
-end
 end

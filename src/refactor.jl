@@ -1,4 +1,3 @@
-using ParameterisedModule
 using NameResolution
 using Base.Enums
 using MLStyle
@@ -25,7 +24,7 @@ end
 
 @enum Ctx C_LOCAL C_GLOBAL C_LEXICAL
 struct State
-    ana::Analyzer
+    ana::Union{Analyzer, Nothing}
     ctx::Ctx
     bound_inits::Set{Symbol}
 end
@@ -65,11 +64,6 @@ function Base.show(io::IO, var::Var)
     print(io,  "$(mut)@local ", var.name)
 end
 
-# const _cache = Dict{UInt64, Int}()
-# _default_c(x::UInt64) =
-#     get!(_cache, x) do
-#         length(_cache)
-#     end
 macro _symref_func(N, n)
     quote
         $__source__
@@ -85,7 +79,7 @@ end
 @_symref_func IS_LOCAL! is_local!
 @_symref_func IS_GLOBAL! is_global!
 
-function solve(ast)
+function solve(ast; toplevel=true)
     S = Ref(State(top_analyzer(), C_LEXICAL, Set{Symbol}()))
     ScopeInfo = IdDict{Expr,Any}()
     PHYSICAL = true
@@ -324,18 +318,18 @@ function solve(ast)
             k.as_non_sym = true
             rule(v)
 
-        @when Expr(:for, :($i = $I), block) = ex
+        @when Expr(:for, :($i = $I), body) = ex
             S₀ = S[]
-            S₁ = CHILD(S₀, pseudo)
+            S₁ = CHILD(S₀, PSEUDO)
             IS_SCOPED(S₁, body)
             RHS(S₀, I)
             LOCAL_LHS(S₁, i)
-            RHS(S₁, block)
+            RHS(S₁, body)
             SymRef[]
 
         @when Expr(:while, cond, body) = ex
             S₀ = S[]
-            S₁ = CHILD(S₀, pseudo)
+            S₁ = CHILD(S₀, PSEUDO)
             IS_SCOPED(S₁, body)
             RHS(S₀, cond)
             RHS(S₁, body)
@@ -408,6 +402,7 @@ function solve(ast)
 
     function from_symref(s::SymRef)
         s.as_non_sym && return s.sym
+        s.ana === nothing && return Var(var, true, true, true)
         var = s.ana.solved[s.sym]
         var isa Symbol && return Var(var, true, true, true)
         local_var_to_var(var)
@@ -418,11 +413,12 @@ function solve(ast)
 
     from_symref(l) = l
 
-    function transform(@nospecialize(ex); topscope=true)
+    function transform(@nospecialize(ex))
         ex = to_symref(ex)
-        if topscope
-            IS_SCOPED(S[], ex)
+        if toplevel
+            GLOBAL()
         end
+        IS_SCOPED(S[], ex)
         rule(ex)
         ana = S[].ana
         run_analyzer(ana)
@@ -432,13 +428,4 @@ function solve(ast)
     transform(ast)
 end # module struct
 
-ex = quote
-    function f(x)
-        y = 1
-        function ()
-            y = 2 + x
-        end
-    end
-end
-
-println(solve(ex))
+solve_from_local(@nospecialize(ex)) = solve(ex; toplevel=true)
