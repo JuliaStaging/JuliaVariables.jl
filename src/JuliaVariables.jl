@@ -1,7 +1,7 @@
 module JuliaVariables
 
 export Scope, Var
-export solve_from_local, solve, rmlines
+export solve_from_local, solve, rmlines, simplify_ex
 
 using NameResolution
 using Base.Enums
@@ -9,6 +9,8 @@ using MLStyle
 @use UppercaseCapturing
 IdDict = Base.IdDict
 Analyzer = NameResolution.Analyzer
+
+include("SimplifyEx.jl")
 
 # auxilliaries
 find_line(ex::Expr) = begin
@@ -85,7 +87,7 @@ end
 @_symref_func IS_GLOBAL! is_global!
 
 const INPLACE_BIN_OP = (
-    :(+=), :(-=), :(*=), :(/=), :(//=), :(%=), :(&=), :(|=), :(\=))
+    :(+=), :(-=), :(*=), :(/=), :(//=), :(%=), :(&=), :(|=), :(\=), :(^=))
 
 is_broadcast_sym(sym) = begin
     s = string(sym)
@@ -97,6 +99,16 @@ is_broadcast_fusing(sym) = begin
     endswith(s, "=") && startswith(s, ".")
 end
 
+
+"""Process expressions with returning their scope.
+The `solve` function can only accept ASTs that
+satifies following conditions:
+- It's a *simplified* expression, which means `JuliaVariables.simplify_ex`
+  will have no effects on the expression. You can check the very concise code
+  of `JuliaVariables.simplify_ex` to understand the simplification rules.
+- No macros included in the expression, as we don't know how much a macro
+  could change the code.
+"""
 function solve(ast; toplevel=true)
     S = Ref(State(top_analyzer(), C_LEXICAL, Set{Symbol}()))
     ScopeInfo = IdDict{Expr,Any}()
@@ -137,6 +149,7 @@ function solve(ast; toplevel=true)
     function LOCAL(ex)
         syms = rule(ex)
         IS_LOCAL!.(syms)
+        REQUIRE!.(syms)
     end
 
     function GLOBAL()
@@ -148,6 +161,7 @@ function solve(ast; toplevel=true)
     function GLOBAL(ex)
         syms = rule(ex)
         IS_GLOBAL!.(syms)
+        REQUIRE!.(syms)
     end
 
     function CHILD(st::State, p::Bool)
@@ -218,10 +232,10 @@ function solve(ast; toplevel=true)
             IS_SCOPED(S₁, body)
             SymRef[]
 
-        @when Expr(:let, a::Symbol, body) = ex
+        @when Expr(:let, a::SymRef, body) = ex
             S₀ = S[]
             S₁ = CHILD(S₀, PSEUDO)
-            LOCAL_LHS(S₁, a)
+            LOCAL(S₁, a)
             RHS(S₁, body)
             IS_SCOPED(S₁, body)
             S[] = S₀
@@ -247,7 +261,7 @@ function solve(ast; toplevel=true)
 
 # broadcast fusing
         @when Expr(hd && if is_broadcast_fusing(hd) end, lhs, rhs) = ex
-            LHS(lhs)
+            RHS(lhs)
             RHS(rhs)
             SymRef[]
 
@@ -322,9 +336,7 @@ function solve(ast; toplevel=true)
             WITH_STATE() do
                 LOCAL()
                 for arg in args
-                    syms = rule(arg)
-                    LOCAL(syms)
-                    RHS(syms)
+                    LOCAL(arg)
                 end
             end
             SymRef[]
@@ -333,9 +345,7 @@ function solve(ast; toplevel=true)
             WITH_STATE() do
                 GLOBAL()
                 for arg in args
-                    syms = rule(arg)
-                    GLOBAL(syms)
-                    RHS(syms)
+                    GLOBAL(arg)
                 end
             end
             SymRef[]

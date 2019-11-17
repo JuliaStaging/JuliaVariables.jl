@@ -11,6 +11,19 @@ end
 rmlines(@nospecialize(a)) = a
 islinenumbernode(@nospecialize(x)) = x isa LineNumberNode
 
+function first_scope_except_top(ex)
+    inner = ex.args[2]
+    find(ex) = @match ex begin
+        Expr(:scoped, scope, inner) => (scope, inner)
+        Expr(head, args...) =>
+            for each in args
+                res = find(each)
+                res !== nothing && return res
+            end
+        _ => nothing
+    end
+    find(inner)
+end
 
 get_fn_scope(ex) =
     @match ex begin
@@ -112,17 +125,7 @@ get_fn_body(ex) =
                    x .^ y
             end
     end)
-    scope = (
-        a.
-         # Expr(:scoped, _, body)
-        args[2].
-        # the 8(include linenos)-th stmt
-        args[8].
-        # Expr(:function, head, body)
-        args[2].
-        # Expr(:scoped, scope, _)
-        args[1]
-    )
+    scope = first_scope_except_top(a)[1]
     @test length(scope.freevars) == 2
 
     a = solve(:(function z(x, k=1)
@@ -157,5 +160,186 @@ get_fn_body(ex) =
               end
           end)))
     println(func |> rmlines)
+end
 
+@testset "uninitialized bound variable" begin
+        ast = quote
+        let x
+            x = 5
+            function ()
+                x = 2
+            end
+        end
+        end |> solve
+        scope = first_scope_except_top(ast)[1]
+        @test isempty(scope.bound_inits)
+    end
+
+@testset "inplace binary" begin
+    ast = quote
+        local x
+        function ()
+            x ^= 5
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    var = scope.freevars[1]
+    @test var.name == :x && var.is_mutable
+end
+
+@testset "type variables" begin
+    ast = quote
+        function (::T) where T <: Number
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    var = scope.bounds[1]
+    @test var.name == :T
+
+    ast = quote
+        function (::T) where {T <: Number, A <: T}
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    # A is not used inside function scope
+    @test Set([e.name for e in scope.bounds]) == Set([:T])
+
+    ast = quote
+        function (::A) where {T <: Number, T <: A <: GlobalType}
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    @test Set([e.name for e in scope.bounds]) == Set([:T, :A])
+end
+
+@testset "default argument is free variables" begin
+    ast = quote
+        z = 2
+        function (x::T = z) where T <: Number
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    var = scope.freevars[1]
+    @test var.name == :z
+end
+
+
+@testset "global mark" begin
+    ast = quote
+        x = 5
+        function ()
+            global x
+            x = 2
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    @test isempty(scope.bounds) && isempty(scope.freevars)
+end
+
+
+@testset "while" begin
+    ast = quote
+        x = 5
+        while cond
+            x = 10
+        end
+    end |> solve
+    scope = first_scope_except_top(ast)[1]
+    x = scope.bounds[1]
+    @test x.name === :x
+    @test x.is_mutable === false
+    @test x.is_global === false
+end
+
+
+@testset "let" begin
+    ast = quote
+        x = 5
+        let x
+            x = 3
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    @test isempty(scope.freevars)
+
+    ast = quote
+        x = 5
+        let x = 3
+            x
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    @test isempty(scope.freevars)
+
+    ast = quote
+        function ()
+            x = 5
+            let
+                y = 1
+            end
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    @test scope.bounds[1].name == :x
+    @test all(scope.freevars) do var
+        var.name !== :y
+    end
+    @test all(scope.bounds) do var
+        var.name !== :y
+    end
+end
+
+@testset "namedtuple" begin
+    ast = quote
+        function (c)
+            (x = 3, )
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    @test [e.name for e in scope.bounds] == [:c]
+
+    ast = quote
+        function (c)
+            (x = 3, y=2; z=3)
+        end
+    end |> solve_from_local
+    scope = first_scope_except_top(ast)[1]
+    @test [e.name for e in scope.bounds] == [:c]
+end
+
+
+
+@testset "broadcast" begin
+    ast = quote
+        x = 1
+        .^ = ^
+        y = 2
+        function()
+            x .^ y
+        end
+    end |> solve_from_local
+    tp = first_scope_except_top(ast)
+    scope = tp[1]
+    @test length(scope.freevars) == 2
+    @test Set([e.name for e in scope.freevars]) == Set([:x, :y])
+    @test @match tp[2].args[2] begin
+        :($_ .^ $_) => true
+        _ => false
+    end
+end
+
+
+@testset "broadcast fusion" begin
+    ast = quote
+        x = [1, 2]
+        function()
+            x .= 1
+        end
+    end |> solve_from_local
+    tp = first_scope_except_top(ast)
+    scope = tp[1]
+    @test length(scope.freevars) == 1
+    @test Set([e.name for e in scope.freevars]) == Set([:x])
+    x = scope.freevars[1]
+    @test x.is_mutable == false
 end
