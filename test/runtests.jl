@@ -343,3 +343,33 @@ end
     x = scope.freevars[1]
     @test x.is_mutable == false
 end
+
+@testset "simplification" begin
+
+    ast = quote
+        for i = I, j = J
+            let x = 1, y
+                c(x) = begin 3 end
+                f(x) do
+                    1
+                end
+            end
+        end
+    end |> rmlines |> simplify_ex
+
+    expec = quote
+        for i in I
+            for j in J
+                let x = 1
+                    let y
+                        function c(x)
+                            3
+                        end
+                        f(function () 1 end, x)
+                    end
+                end
+            end
+        end
+    end |> rmlines
+    @test string(ast) == string(expec)
+end
