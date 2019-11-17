@@ -373,3 +373,25 @@ end
     end |> rmlines
     @test string(ast) == string(expec)
 end
+
+@testset "no effect" begin
+    ast = macroexpand(@__MODULE__(), quote
+        function ()
+            @label x
+            @goto x
+        end
+    end) |> solve_from_local
+    tp = first_scope_except_top(ast)
+    scope = tp[1]
+    @test isempty(scope.bounds)
+    @test isempty(scope.freevars)
+
+    ast = macroexpand(@__MODULE__(), quote
+        @inline function ()
+        end
+    end) |> solve_from_local
+    tp = first_scope_except_top(ast)
+    scope = tp[1]
+    @test isempty(scope.bounds)
+    @test isempty(scope.freevars)
+end

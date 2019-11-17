@@ -99,6 +99,26 @@ is_broadcast_fusing(sym) = begin
     endswith(s, "=") && startswith(s, ".")
 end
 
+function no_ana(ex)
+    @match ex begin
+        # inline
+        Expr(:meta, _...)          ||
+        # @label, @goto
+        Expr(:symboliclabel, _...) ||
+        Expr(:symbolicgoto, _...)  ||
+        # @inbounds
+        Expr(:inbounds, _...)      ||
+        # @generated
+        Expr(:generated, _...)     ||
+        # @boundscheck
+        Expr(:boundscheck, _...)   ||
+        # @isdefined
+        Expr(:isdefined, _...)     ||
+        # @locals
+        Expr(:locals) => true
+        _ => false
+    end
+end
 
 """Process expressions with returning their scope.
 The `solve` function can only accept ASTs that
@@ -221,8 +241,9 @@ function solve(ast; toplevel=true)
         sym.ana = S[].ana; SymRef[sym]
     end
     rule(ex::Expr)::Vector{SymRef} =
-
-        @when Expr(:let, :($a = $b), body) = ex begin
+        @when (_ && if no_ana(ex) end) = nothing begin
+            SymRef[]
+        @when Expr(:let, :($a = $b), body) = ex
             S₀ = S[]
             S₁ = CHILD(S₀, PSEUDO)
             RHS(S₀, b)
@@ -457,7 +478,7 @@ function solve(ast; toplevel=true)
 
     function from_symref(s::SymRef)
         s.as_non_sym && return s.sym
-        s.ana === nothing && return Var(var, true, true, true)
+        s.ana === nothing && return Var(s.sym, true, true, true)
         var = s.ana.solved[s.sym]
         var isa Symbol && return Var(var, true, true, true)
         local_var_to_var(var)
