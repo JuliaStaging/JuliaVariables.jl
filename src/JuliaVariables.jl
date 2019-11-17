@@ -1,7 +1,7 @@
 module JuliaVariables
 
 export Scope, Var
-export solve_from_local, solve, rmlines, simplify_ex
+export solve_from_local, solve, simplify_ex
 
 using NameResolution
 using Base.Enums
