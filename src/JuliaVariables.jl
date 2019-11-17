@@ -1,105 +1,103 @@
 module JuliaVariables
-import LegibleLambdas
-using MLStyle
+
+export Scope, Var
+export solve_from_local, solve, rmlines, simplify_ex
+
 using NameResolution
+using Base.Enums
+using MLStyle
+@use UppercaseCapturing
+IdDict = Base.IdDict
+Analyzer = NameResolution.Analyzer
 
-export Scope, ScopedVar, ScopedFunc, ScopedGenerator
-export solve_from_local, solve
-const DEBUG = false
-@static if DEBUG
-macro logger(call)
-    @when :($f($ana, $(args...))) = call begin
-        :($f($ana, $(args...)) = begin
-            println($(QuoteNode(f)),'(', $string($objectid($ana), base = 62), ",", $(args...), ')')
-            $NameResolution.$f($ana, $(args...))
-        end)
+include("SimplifyEx.jl")
+
+# auxilliaries
+find_line(ex::Expr) = begin
+    for e in ex.args
+        l = find_line(e)
+        l !== nothing && return l
     end
 end
-@logger child_analyzer!(ana, is_physical)
-@logger enter!(ana, sym)
-@logger require!(ana, sym)
-@logger is_local!(ana, sym)
-@logger is_global!(ana, sym)
+
+find_line(e::LineNumberNode) = e
+find_line(_) = nothing
+error_ex(sym::Symbol, ex) =
+    begin line = find_line(ex)
+    locmsg = line === nothing ? "" : "$line: "
+    error("$(locmsg)Malformed or non-canonicalized $sym expression")
 end
-@generated function field_update(main :: T, field::Val{Field}, value) where {T, Field}
-    fields = fieldnames(T)
+
+
+@enum Ctx C_LOCAL C_GLOBAL C_LEXICAL
+struct State
+    ana::Union{Analyzer, Nothing}
+    ctx::Ctx
+    bound_inits::Set{Symbol}
+end
+State(ana::Analyzer, ctx::Ctx) = State(ana, ctx, Set{Symbol}())
+
+mutable struct SymRef
+    sym::Symbol
+    ana::Union{Nothing, Analyzer}
+    as_non_sym::Bool
+    # as_non_sym = true : like for a key of namedtuples or argument keywords
+end
+
+function Base.show(io::IO, sym::SymRef)
+    flag = ""
+    if sym.ana === nothing
+        flag *= "wild "
+    end
+    if sym.as_non_sym
+        flag *= "nonsym "
+    end
+    print(io, "$(flag)$(sym.sym)")
+end
+
+SymRef(sym::Symbol, ana::Union{Nothing, Analyzer}) = SymRef(sym, ana, false)
+
+struct Var
+    name::Symbol
+    is_mutable::Bool
+    is_shared::Bool
+    is_global::Bool
+end
+
+function Base.show(io::IO, var::Var)
+    var.is_global && return print(io, "@global ", var.name)
+    mut = var.is_mutable ? "mut " : ""
+    var.is_shared && return print(io,  "$(mut)@shared ", var.name)
+    print(io,  "$(mut)@local ", var.name)
+end
+
+macro _symref_func(N, n)
     quote
-        $T($([field !== Field ? :(main.$field) : :value for field in fields]...))
-    end
-end
-
-macro with(main, field::Symbol, value)
-    :($field_update($main, $(Val(field)), $value)) |> esc
-end
-
-struct ScopedVar
-    scope :: Scope
-    sym   :: Symbol
-end
-
-struct ScopedFunc
-    scope :: Scope
-    func  :: Expr
-end
-
-struct ScopedGenerator
-    scope :: Scope
-    gen  :: Expr
-end
-
-function var_repr(var :: LocalVar)
-    r = ""
-    if var.is_mutable.x
-        r *= "mut "
-    end
-    if var.is_shared.x
-        r *= "cell "
-    end
-    r * string(var.sym)
-end
-
-function var_repr(var :: GlobalVar)
-    "global $var"
-end
-
-function Base.show(io::IO, scopedvar::ScopedVar)
-    scope = scopedvar.scope
-    sym = scopedvar.sym
-    var = var_repr(scope[sym])
-    Base.print(io, "@", var)
-end
-
-function Base.show(io::IO, o::ScopedFunc)
-    scope = o.scope
-    func = o.func
-    Base.print(io, "[", join(map(var_repr, values(scope.freevars) |> collect), ",") , "]", func)
-end
-
-function Base.show(io::IO, o::ScopedGenerator)
-    scope = o.scope
-    gen = o.gen
-    Base.print(io, "[", join(map(var_repr, values(scope.freevars) |> collect), ",") , "]", gen)
+        $__source__
+        function $N(symref::SymRef)
+            $n(symref.ana, symref.sym)
+        end
+    end |> esc
 end
 
 
-islinenumbernode(x) = x isa LineNumberNode
-rmlines(ex::Expr) = begin
-    hd = ex.head
-    tl = map(rmlines, filter(!islinenumbernode, ex.args))
-    Expr(hd, tl...)
+@_symref_func ENTER! enter!
+@_symref_func REQUIRE! require!
+@_symref_func IS_LOCAL! is_local!
+@_symref_func IS_GLOBAL! is_global!
+
+const INPLACE_BIN_OP = (
+    :(+=), :(-=), :(*=), :(/=), :(//=), :(%=), :(&=), :(|=), :(\=), :(^=))
+
+is_broadcast_sym(sym) = begin
+    s = string(sym)
+    startswith(s, ".") && Base.isoperator(Symbol(s[1:end]))
 end
 
-rmlines(ex::ScopedFunc) = begin
-    func = ex.func |> rmlines
-    @with ex func func
+is_broadcast_fusing(sym) = begin
+    s = string(sym)
+    endswith(s, "=") && startswith(s, ".")
 end
-
-rmlines(ex::ScopedGenerator) = begin
-    gen = ex.gen |> rmlines
-    @with ex gen gen
-end
-
-rmlines(a) = a
 
 function no_ana(ex)
     @match ex begin
@@ -122,271 +120,390 @@ function no_ana(ex)
     end
 end
 
-function quick_lambda(ex)
-    @when Expr(:call, args...) && if any(==(:_), args) end = ex begin
-        quick_arg = gensym("quick_arg")
-        λ = gensym("λ")
-        args = Any[arg === :_ ? quick_arg : quick_lambda(arg)
-                   for arg in args]
-        ex = Expr(:call, args...)
-        :($LegibleLambdas.@λ($quick_arg -> $ex))
-    @when Expr(hd, args...) = ex
-        Expr(hd, map(quick_lambda, args)...)
-    @otherwise
-        ex
-    end
-end
+"""Process expressions with returning their scope.
+The `solve` function can only accept ASTs that
+satifies following conditions:
+- It's a *simplified* expression, which means `JuliaVariables.simplify_ex`
+  will have no effects on the expression. You can check the very concise code
+  of `JuliaVariables.simplify_ex` to understand the simplification rules.
+- No macros included in the expression, as we don't know how much a macro
+  could change the code.
+"""
+function solve(ast; toplevel=true)
+    S = Ref(State(top_analyzer(), C_LEXICAL, Set{Symbol}()))
+    ScopeInfo = IdDict{Expr,Any}()
+    PHYSICAL = true
+    PSEUDO = false
+    IS_BOUND_INIT = Ref(false)
 
-macro quick_lambda(ex)
-    esc(quick_lambda(ex))
-end
-
-function with_fname(cont, ex)
-    @match ex begin
-        Expr(:call, f, args...) => Expr(:call, cont(f), args...)
-        :($a where {$(args...)}) => :($(with_fname(cont, a)) where {$(args...)})
-        :($a :: $t)              => :($(with_fname(cont, a)) :: $t)
-        a => a
-    end
-end
-
-is_func_sym(sym) = sym === :function
-
-is_broadcast_fusing(sym) = begin
-    s = string(sym)
-    endswith(s, "=") && startswith(s, ".")
-end
-
-is_broadcast_sym(sym) = begin
-    s = string(sym)
-    startswith(s, ".") && Base.isoperator(Symbol(s[1:end]))
-end
-
-is_rhs_sym(sym) = begin
-    (sym in Symbol[:ref, :.])
-end
-
-@data ScopeDesc begin
-    Local()
-    Global()
-    Arg()
-    Lexical()
-end
-
-struct CtxFlag
-    default_scope :: ScopeDesc
-    is_lhs        :: Bool
-end
-MLStyle.Record.@as_record CtxFlag
-
-Base.@pure Base.:+(flag :: CtxFlag, desc :: Symbol) =
-    @when CtxFlag(default_scope=default_scope, is_lhs=is_lhs) = flag begin
-        @match desc begin
-            :lexical => CtxFlag(Lexical(), is_lhs)
-            :global => CtxFlag(Global(), is_lhs)
-            :local => CtxFlag(Local(), is_lhs)
-            :arg => CtxFlag(Arg(), is_lhs)
-            :lhs => CtxFlag(default_scope, true)
-            :rhs => CtxFlag(default_scope, false)
+    @nospecialize
+    function LHS(ex)
+        syms = rule(ex)
+        st = S[]
+        st.ctx ===
+            C_LOCAL ?
+            IS_LOCAL!.(syms) :
+        st.ctx ===
+            C_GLOBAL ?
+            IS_GLOBAL!.(syms) :
+            nothing
+        ENTER!.(syms)
+        REQUIRE!.(syms)
+        IS_BOUND_INIT[] && return for sym in syms
+            sym.as_non_sym = true
+            push!(st.bound_inits, sym.sym)
         end
-    @otherwise
-        error("impossible")
     end
 
-CtxFlag() = CtxFlag(Lexical(), false)
-
-function solve(ana, sym :: Symbol, ctx_flag::CtxFlag)
-    default_scope = ctx_flag.default_scope
-    @when Global() = default_scope begin
-        is_global!(ana, sym)
-    @when Local() || Arg() = default_scope
-        is_local!(ana, sym)
+    function RHS(ex)
+        syms = rule(ex)
+        REQUIRE!.(syms)
     end
-    if ctx_flag.is_lhs
-        enter!(ana, sym)
-    else
-        require!(ana, sym)
-    end
-    ScopedVar(ana.solved, sym)
-end
 
-function solve(ana, ex::Expr, ctx_flag::CtxFlag)
-    no_ana(ex) && return ex
-    @match ex begin
-# give up analysing macrocall expressions.
-        Expr(:macrocall, _...) => ex
-# scoped constructs
-        Expr(hd && if hd in (:function, :(=), :->) end, a,  b) =>
-            begin
-                is_fn = is_func_sym(hd)
-                a = with_fname(a) do name
-                    is_fn = true
-                    !(name isa Symbol) && return name
-                    solve(ana, name, ctx_flag + :lhs)
+    function LOCAL()
+        s = S[]
+        S[] = State(s.ana, C_LOCAL, s.bound_inits)
+        nothing
+    end
+
+    function LOCAL(ex)
+        syms = rule(ex)
+        IS_LOCAL!.(syms)
+        REQUIRE!.(syms)
+    end
+
+    function GLOBAL()
+        s = S[]
+        S[] = State(s.ana, C_GLOBAL, s.bound_inits)
+        nothing
+    end
+
+    function GLOBAL(ex)
+        syms = rule(ex)
+        IS_GLOBAL!.(syms)
+        REQUIRE!.(syms)
+    end
+
+    function CHILD(st::State, p::Bool)
+        ana = st.ana
+        new_ana = child_analyzer!(ana, p)
+        State(new_ana, C_LEXICAL)
+    end
+
+    function WITH_STATE(f::Function)
+        S_ = S[]
+        try
+            f()
+        finally
+            S[] = S_
+        end
+    end
+
+    function WITH_STATE(f::Function, st::State)
+        S_ = S[]
+        S[] = st
+        try
+            f()
+        finally
+            S[] = S_
+        end
+    end
+
+    function LOCAL_LHS(st, ex)
+        WITH_STATE(st) do
+            LOCAL()
+            ns = IS_BOUND_INIT[]
+            try
+                IS_BOUND_INIT[] = true
+                LHS(ex)
+            finally
+                IS_BOUND_INIT[] = ns
+            end
+        end
+    end
+
+    LHS(st, ex) = WITH_STATE(st) do; LHS(ex) end
+    RHS(st, ex) = WITH_STATE(st) do; RHS(ex) end
+    LOCAL(st, ex) = WITH_STATE(st) do; LOCAL(ex) end
+    GLOBAL(st, ex) = WITH_STATE(st) do; GLOBAL(ex) end
+    LOCAL_LHS(ex) = LOCAL_LHS(S[], ex)
+
+    @specialize
+
+    function IS_SCOPED(st::State, ex::Expr)
+        ScopeInfo[ex] =(st.ana.solved.bounds, st.ana.solved.freevars, st.bound_inits)
+    end
+
+    rule(_) = SymRef[]
+    rule(sym::Symbol) =
+        error("An immutable Symbol cannot be analyzed. Transform them to SymRefs.")
+    rule(sym::SymRef) = begin
+        sym.ana = S[].ana; SymRef[sym]
+    end
+    rule(ex::Expr)::Vector{SymRef} =
+        @when (_ && if no_ana(ex) end) = nothing begin
+            SymRef[]
+        @when Expr(:let, :($a = $b), body) = ex
+            S₀ = S[]
+            S₁ = CHILD(S₀, PSEUDO)
+            RHS(S₀, b)
+            LOCAL_LHS(S₁, a)
+            RHS(S₁, body)
+            S[] = S₀
+            IS_SCOPED(S₁, body)
+            SymRef[]
+
+        @when Expr(:let, a::SymRef, body) = ex
+            S₀ = S[]
+            S₁ = CHILD(S₀, PSEUDO)
+            LOCAL(S₁, a)
+            RHS(S₁, body)
+            IS_SCOPED(S₁, body)
+            S[] = S₀
+            SymRef[]
+
+        @when Expr(:let, Expr(:block), body) = ex
+            S₀ = S[]
+            S₁ = CHILD(S₀, PSEUDO)
+            RHS(S₁, body)
+            IS_SCOPED(S₁, body)
+            S[] = S₀
+            SymRef[]
+
+        @when Expr(:let, seq, body) = ex
+            error_ex(:let, seq)
+
+# assign is canonicalized, thus cannot be a function
+        @when Expr(:(=), lhs, rhs) = ex
+            @when Expr(:call, _...) = lhs begin error_ex(:(=), ex) end
+            LHS(lhs)
+            RHS(rhs)
+            SymRef[]
+
+# broadcast fusing
+        @when Expr(hd && if is_broadcast_fusing(hd) end, lhs, rhs) = ex
+            RHS(lhs)
+            RHS(rhs)
+            SymRef[]
+
+# addition assignment, https://github.com/thautwarm/JuliaVariables.jl/issues/6
+        @when Expr(hd && if hd in INPLACE_BIN_OP end, lhs, rhs) = ex
+            LHS(lhs)
+            RHS(rhs)
+            SymRef[]
+
+# broadcasting symbols
+        @when (
+            Expr(:call, f :: SymRef, args...) &&
+                if length(args) in (1, 2) && is_broadcast_sym(f.sym)
                 end
-                is_fn = is_fn || hd !== :(=)
-                ana = if is_fn
-                    ctx_flag = ctx_flag + :arg
-                    child_analyzer!(ana, true)
-                else
-                    ana
-                end
-                a = solve(ana, a, ctx_flag + :lhs)
-                b = solve(ana, b, CtxFlag())
-                func = Expr(hd, a, b)
-                is_fn ? ScopedFunc(ana.solved, func) : func
-            end
-        Expr(hd && if hd in (:for, :while) end, a, b) =>
-            begin ctx_flag = CtxFlag()
-                ana = child_analyzer!(ana, false)
-                a = solve(ana, a, ctx_flag + :lhs + :local)
-                b = solve(ana, b, ctx_flag)
-                Expr(hd, a, b)
-            end
-        Expr(:try, attempt, a, blocks...) =>
-            @quick_lambda begin ctx_flag = CtxFlag()
-                attempt = solve(child_analyzer!(ana, false), attempt, ctx_flag)
-                a = solve(child_analyzer!(ana, false), a, ctx_flag + :lhs) # catch exc
-                blocks = map(solve(child_analyzer!(ana, false), _, ctx_flag), blocks)
-                Expr(:try, attempt, a, blocks...)
-            end
-        Expr(:let, Expr(:block, binds...) || bind && Do(binds = [bind]), a) =>
-            begin ctx_flag = CtxFlag() + :lhs + :arg
-                cur_scope = ana
-                binds = map(binds) do each
-                    if !isa(each, LineNumberNode)
-                        cur_scope = child_analyzer!(cur_scope, false)
-                        solve(cur_scope, each, ctx_flag)
-                    else
-                        each
-                    end
-                end
-                a = solve(cur_scope, a, CtxFlag())
-                Expr(:let, Expr(:block, binds...), a)
-            end
-        Expr(:do, call, lam) =>
-            begin
-                ctx_flag = CtxFlag()
-                call = solve(ana, call, ctx_flag)
-                lam = solve(ana, lam, ctx_flag)
-                Expr(:do, call, lam)
-            end
-        Expr(:generator, expr, binds...) =>
-            @quick_lambda begin ctx_flag = CtxFlag()
-                ana = child_analyzer!(ana, true)
-                binds = map(solve(ana, _, ctx_flag + :lhs + :local), binds)
-                expr = solve(ana, expr, ctx_flag)
-                ScopedGenerator(ana.solved, Expr(:generator, expr, binds...))
-            end
-        Expr(:filter, cond, binds...) =>
-            @quick_lambda begin
-                binds = map(solve(ana, _, ctx_flag), binds)
-                cond = solve(ana, cond, ctx_flag)
-                Expr(:filter, cond, binds...)
-            end
-        Expr(hd && if is_broadcast_fusing(hd) end, a, b) =>
-            begin
-                a = solve(ana, a, ctx_flag + :lhs)
-                b = solve(ana, b, ctx_flag + :rhs + :lexical)
-                Expr(hd, a, b)
-            end
-        Expr(:local, args...) =>
-            @quick_lambda  begin
-                args = map(solve(ana, _, ctx_flag + :local), args)
-                Expr(:local, args...)
-            end
-        Expr(:global, args...) =>
-            @quick_lambda  begin
-                args = map(solve(ana, _, ctx_flag + :global), args)
-                Expr(:global, args...)
-            end
-# non-scoped constructs
-        :($a where {$(tps...)}) =>
-            @quick_lambda begin
-                if !ctx_flag.is_lhs && !isempty(tps)
-                    ana = child_analyzer!(ana, false)
-                    ctx_flag = CtxFlag()
-                    tps = map(solve(ana, _, ctx_flag + :lhs), tps)
-                else
-                    tps = map(solve(ana, _, ctx_flag + :arg), tps)
-                end
-                a = solve(ana, a, ctx_flag)
-                :($a where {$(tps...)})
-            end
-        :($a :: $b) =>
-            begin
-                a = solve(ana, a, ctx_flag)
-                b = solve(ana, b, CtxFlag())
-                :($a :: $b)
-            end
-        Expr(hd && if hd in (:module, :baremodule) end, args...) =>
-           @quick_lambda Expr(hd, map(solve(ana, _, ctx_flag), args)...)
+            ) = ex
+            f.as_non_sym = true
+            RHS.(args)
+            Symbol[]
 # namedtuple
 # https://github.com/thautwarm/GG.jl/issues/8
-        Expr(:tuple, args...) =>
-            let args = map(args) do arg
-                    @when Expr(:(=), k::Symbol, v) = arg begin
-                        Expr(:(=), k, solve(ana, v, ctx_flag))
-                    @otherwise
-                        solve(ana, arg, ctx_flag)
+        @when Expr(:tuple, elts...) = ex
+            syms = SymRef[]
+            for elt in elts
+                sym_ex = @when :($a = $b) = elt begin
+                    a isa SymRef || error("invalid namedtuple")
+                    a.as_non_sym = true
+                    b
+                @otherwise
+                    elt
+                end
+                append!(syms, rule(sym_ex))
+            end
+            syms
+
+        @when Expr(:where, t, tps...) = ex
+            S₁ = CHILD(S[], PSEUDO)
+            for tp in tps
+                @match tp begin
+                :($a >: $b) || :($a <: $b) => begin LOCAL_LHS(S₁, a); RHS(S₁, b) end
+                :($a >: $b >: $c) ||
+                :($a <: $b <: $c) => begin RHS(S₁, a); LOCAL_LHS(S₁, b); RHS(S₁, c) end
+                ::SymRef => begin LOCAL_LHS(S₁, tp) end
+                _ => error_ex(:where, ex)
+                end
+            end
+            RHS(S[], t)
+            SymRef[]
+
+        @when Expr(:kw, k, v) = ex
+            k isa SymRef || error("invalid keyword argument")
+            k.as_non_sym = true
+            rule(v)
+
+        @when Expr(:for, :($i = $I), body) = ex
+            S₀ = S[]
+            S₁ = CHILD(S₀, PSEUDO)
+            IS_SCOPED(S₁, body)
+            RHS(S₀, I)
+            LOCAL_LHS(S₁, i)
+            RHS(S₁, body)
+            SymRef[]
+
+        @when Expr(:while, cond, body) = ex
+            S₀ = S[]
+            S₁ = CHILD(S₀, PSEUDO)
+            IS_SCOPED(S₁, body)
+            RHS(S₀, cond)
+            RHS(S₁, body)
+            SymRef[]
+
+        @when Expr(:local, args...) = ex
+            WITH_STATE() do
+                LOCAL()
+                for arg in args
+                    LOCAL(arg)
+                end
+            end
+            SymRef[]
+
+        @when Expr(:global, args...) = ex
+            WITH_STATE() do
+                GLOBAL()
+                for arg in args
+                    GLOBAL(arg)
+                end
+            end
+            SymRef[]
+
+
+        @when Expr(:function, header, body) = ex
+            left = header
+            S₀ = S[]
+            S₁ = CHILD(S₀, PSEUDO)
+            S₂ = CHILD(S₁, PHYSICAL)
+            IS_SCOPED(S₂, body)
+
+            # check type parameters
+            @when :($left_ where {$(freshes...)}) = left begin
+                S[] = S₁
+                for decl in freshes
+                        @match decl begin
+                        :($a >: $b) || :($a <: $b) => begin LOCAL_LHS(a); LOCAL_LHS(S₂, a); RHS(b) end
+                        :($a >: $b >: $c) ||
+                        :($a <: $b <: $c) => begin RHS(a); LOCAL_LHS(b); LOCAL_LHS(S₂, b); RHS(c) end
+                        ::SymRef => begin LOCAL_LHS(decl); LOCAL_LHS(S₂, decl) end
+                        _ => error_ex(:where, ex)
                     end
                 end
-                Expr(:tuple, args...)
+                left = left_;nothing
             end
-# keyword arguments for tuples or calls
-        Expr(:kw, k::Symbol, v) =>
-            begin
-                if ctx_flag.default_scope == Arg()
-                    solve(ana, k, ctx_flag)
+
+            # check return type
+            @when :($left_::$t) = left begin
+                RHS(S₁, t)
+                left = left_;nothing
+            end
+
+            # check function name
+            args = @match left begin
+                Expr(:call, f, args...) => begin LHS(S₀, f); args end
+                Expr(:tuple, args...)   => args
+                # declaration
+                ::Symbol => []
+                _ => error_ex(:function, ex)
+            end
+
+            # check args
+            function visit_arg(arg)
+                @nospecialize arg
+                @when (:($arg_ = $default) || Expr(:kw, arg_, default)) = arg begin
+                    RHS(S₂, default)
+                    arg = arg_
                 end
-                Expr(:kw, k, solve(ana, v, ctx_flag + :rhs))
-            end
-# broadcasting symbols
-        Expr(:call, f :: Symbol, args...) &&
-            if length(args) in (1, 2) && is_broadcast_sym(f)
-            end =>
-            @quick_lambda let args = map(solve(ana, _, ctx_flag), args)
-                Expr(:call, f, args...)
-            end
-# addition assignment, https://github.com/thautwarm/JuliaVariables.jl/issues/6
-        Expr(hd && if hd in (:(+=), :(*=), ) end, var, rhs...) =>
-            @quick_lambda begin
-                var = solve(ana, var, ctx_flag + :lhs)
-                rhs = map(solve(ana, _, ctx_flag), rhs)
-                Expr(hd, var, rhs...)
-            end
-        Expr(hd, args...) =>
-            @quick_lambda begin
-                if is_rhs_sym(hd)
-                    ctx_flag += :rhs
+                @when :($arg_::$t) = arg begin
+                    RHS(S₁, t)
+                    arg = arg_
                 end
-                args = map(solve(ana, _, ctx_flag), args)
-                Expr(hd, args...)
+                LOCAL_LHS(S₂, arg)
             end
+            for arg in args
+                @when Expr(:parameters, kwargs...) = arg begin
+                    foreach(visit_arg, kwargs)
+                @otherwise
+                    visit_arg(arg)
+                end
+            end
+            RHS(S₂, body)
+            S[] = S₀
+            SymRef[]
+
+        @when Expr(_, args...) = ex
+            syms = SymRef[]
+            for each in args
+                append!(syms, rule(each))
+            end
+            syms
+        end
+
+    function local_var_to_var(var::LocalVar)::Var
+        Var(var.sym, var.is_mutable[], var.is_shared[], false)
     end
-end
 
-function solve(ana, ex, ctx_flag::CtxFlag)
-    ex
-end
+    function to_symref(ex::Expr)
+        args = ex.args
+        for i = 1:length(args)
+            args[i] = to_symref(args[i])
+        end
+        ex
+    end
 
-function solve(ana, ex)
-    solve(ana, ex, CtxFlag())
-end
+    function to_symref(s::Symbol)
+        SymRef(s, nothing)
+    end
 
-function solve(ex)
-    ana = top_analyzer()
-    ex = solve(ana, ex)
-    anas = [(@with child parent nothing) for child in ana.children]
-    foreach(run_analyzer, anas)
-    ex
-end
+    to_symref(@nospecialize(l)) = l
 
-function solve_from_local(ex)
-    ana = top_analyzer()
-    ex = solve(ana, ex)
-    run_analyzer(ana)
-    ex
-end
+    function from_symref(ex::Expr)
+        args = ex.args
+        for i = 1:length(args)
+            args[i] = from_symref(args[i])
+        end
+        haskey(ScopeInfo, ex) && return begin
+            triple = ScopeInfo[ex]
+            scope_info = (
+                bounds = Var[local_var_to_var(v) for (_, v) = triple[1]],
+                freevars = Var[local_var_to_var(v) for (_, v) = triple[2]],
+                bound_inits = Symbol[triple[3]...]
+            )
+            Expr(:scoped, scope_info, ex)
+        end
+        ex
+    end
+
+    function from_symref(s::SymRef)
+        s.as_non_sym && return s.sym
+        s.ana === nothing && return Var(s.sym, true, true, true)
+        var = s.ana.solved[s.sym]
+        var isa Symbol && return Var(var, true, true, true)
+        local_var_to_var(var)
+    end
+
+    from_symref(s::Symbol) =
+        error("An immutable Symbol cannot be analyzed. Transform them to SymRefs.")
+
+    from_symref(l) = l
+
+    function transform(@nospecialize(ex))
+        ex = to_symref(ex)
+        if toplevel
+            GLOBAL()
+        end
+        IS_SCOPED(S[], ex)
+        rule(ex)
+        ana = S[].ana
+        run_analyzer(ana)
+        from_symref(ex)
+    end
+
+    transform(ast)
+end # module struct
+
+solve_from_local(@nospecialize(ex)) = solve(ex; toplevel=false)
 
 end # module
