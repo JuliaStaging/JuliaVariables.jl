@@ -1,7 +1,7 @@
 module JuliaVariables
 
 export Scope, Var
-export solve_from_local, solve, simplify_ex
+export solve_from_local, solve_from_local!, solve, solve!, simplify_ex
 
 using NameResolution
 using Base.Enums
@@ -121,7 +121,7 @@ function no_ana(ex)
 end
 
 """Process expressions with returning their scope.
-The `solve` function can only accept ASTs that
+The `solve!` function can only accept ASTs that
 satifies following conditions:
 - It's a *simplified* expression, which means `JuliaVariables.simplify_ex`
   will have no effects on the expression. You can check the very concise code
@@ -129,7 +129,7 @@ satifies following conditions:
 - No macros included in the expression, as we don't know how much a macro
   could change the code.
 """
-function solve(ast; toplevel=true)
+function solve!(ast; toplevel=true)
     S = Ref(State(top_analyzer(), C_LEXICAL, Set{Symbol}()))
     ScopeInfo = IdDict{Expr,Any}()
     PHYSICAL = true
@@ -504,6 +504,23 @@ function solve(ast; toplevel=true)
     transform(ast)
 end # module struct
 
-solve_from_local(@nospecialize(ex)) = solve(ex; toplevel=false)
+solve_from_local!(@nospecialize(ex)) = solve!(ex; toplevel=false)
+
+_depwarn(sym) = Base.depwarn(
+    "`$sym(ex)` is deprecated in JuliaVariables 0.2.x. " *
+    "Please use `$(sym)!(ex)` instead.  `$sym(ex)`, which currently mutates `ex` " *
+    "in-place, will be re-introduced in 0.3 as a non-mutating variant.",
+    sym,
+)
+
+function solve(@nospecialize(ex))
+    _depwarn(:solve)
+    solve!(ex)
+end
+
+function solve_from_local(@nospecialize(ex))
+    _depwarn(:solve_from_local)
+    solve_from_local!(ex)
+end
 
 end # module

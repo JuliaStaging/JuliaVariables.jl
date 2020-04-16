@@ -50,21 +50,21 @@ get_fn_body(ex) =
     end
 
 @testset "JuliaVariables.jl" begin
-    func = solve(:(function f(x)
+    func = solve!(:(function f(x)
         let y = x + 1
             y
         end
     end))
     println(func |> rmlines)
 
-    func = solve(:(function f(x)
+    func = solve!(:(function f(x)
         y = x + 1
         z -> z + y
     end))
 
     println(func |> rmlines)
 
-    func = solve(:(function f(x)
+    func = solve!(:(function f(x)
         y = x + 1
         let y = y + 1
             for z in 1:10
@@ -74,7 +74,7 @@ get_fn_body(ex) =
     end))
     println(func |> rmlines)
 
-    func = solve(
+    func = solve!(
         macroexpand(@__MODULE__,:(
         @inline function f(x)
             y = x + 1
@@ -86,12 +86,12 @@ get_fn_body(ex) =
     println(func |> rmlines)
     # @test map(haskey(func.scope.freevars, _), [])
 
-    func = solve_from_local(quote
+    func = solve_from_local!(quote
         a -> a + z
     end)
     println(func |> rmlines)
 
-    func = solve_from_local(quote
+    func = solve_from_local!(quote
     q = a
     function z(x, k=1)
         (x=x, k=k, q=q)
@@ -100,24 +100,24 @@ get_fn_body(ex) =
     println(func |> rmlines)
     # Write your own tests here.
 
-    a = solve(:(function k(x::T) where T
+    a = solve!(:(function k(x::T) where T
                 (1, T)
               end
     ))
 
     @test any(x -> x.name == :T, get_fn_scope(a).bounds)
 
-    # a = solve(:(2 .^ [2, 3]))
+    # a = solve!(:(2 .^ [2, 3]))
     # @test eval(a) == [4, 8]
 
-    a = solve(:(function z(x, k=1)
+    a = solve!(:(function z(x, k=1)
                    x + 20 + a + k
                end
     ))
 
     @test any(x -> x.name == :k, get_fn_scope(a).bounds)
 
-     a = solve_from_local(quote
+     a = solve_from_local!(quote
             x  = 1
             y  = 2
             .^ = 2
@@ -128,20 +128,20 @@ get_fn_body(ex) =
     scope = first_scope_except_top(a)[1]
     @test length(scope.freevars) == 2
 
-    a = solve(:(function z(x, k=1)
+    a = solve!(:(function z(x, k=1)
                    (k=k, )
                end
     ))
 
     @test any(x -> x.name == :k, get_fn_scope(a).bounds)
 
-    @test @when :(k=$_, ) = get_fn_body(a).args[2] begin
+    @test @when :(k=$_, ) = get_fn_body(a).args[end] begin
         true
     @otherwise
         false
     end
 
-    func = solve(:(function (x)
+    func = solve!(:(function (x)
               z = x + 1
               y -> begin
                   z += 1
@@ -152,7 +152,7 @@ get_fn_body(ex) =
     println(func |> rmlines)
     @test any(x -> x.name == :z && x.is_mutable, get_fn_scope(func).bounds)
 
-    func = solve(macroexpand(@__MODULE__, :(@inline function (x)
+    func = solve!(macroexpand(@__MODULE__, :(@inline function (x)
               z = x + 1
               @inline function (y)
                   z += 1
@@ -170,7 +170,7 @@ end
                 x = 2
             end
         end
-        end |> solve
+        end |> solve!
         scope = first_scope_except_top(ast)[1]
         @test isempty(scope.bound_inits)
     end
@@ -181,7 +181,7 @@ end
         function ()
             x ^= 5
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     var = scope.freevars[1]
     @test var.name == :x && var.is_mutable
@@ -191,7 +191,7 @@ end
     ast = quote
         function (::T) where T <: Number
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     var = scope.bounds[1]
     @test var.name == :T
@@ -199,7 +199,7 @@ end
     ast = quote
         function (::T) where {T <: Number, A <: T}
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     # A is not used inside function scope
     @test Set([e.name for e in scope.bounds]) == Set([:T])
@@ -207,7 +207,7 @@ end
     ast = quote
         function (::A) where {T <: Number, T <: A <: GlobalType}
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     @test Set([e.name for e in scope.bounds]) == Set([:T, :A])
 end
@@ -217,7 +217,7 @@ end
         z = 2
         function (x::T = z) where T <: Number
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     var = scope.freevars[1]
     @test var.name == :z
@@ -231,7 +231,7 @@ end
             global x
             x = 2
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     @test isempty(scope.bounds) && isempty(scope.freevars)
 end
@@ -243,7 +243,7 @@ end
         while cond
             x = 10
         end
-    end |> solve
+    end |> solve!
     scope = first_scope_except_top(ast)[1]
     x = scope.bounds[1]
     @test x.name === :x
@@ -258,7 +258,7 @@ end
         let x
             x = 3
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     @test isempty(scope.freevars)
 
@@ -267,7 +267,7 @@ end
         let x = 3
             x
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     @test isempty(scope.freevars)
 
@@ -278,7 +278,7 @@ end
                 y = 1
             end
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     @test scope.bounds[1].name == :x
     @test all(scope.freevars) do var
@@ -294,7 +294,7 @@ end
         function (c)
             (x = 3, )
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     @test [e.name for e in scope.bounds] == [:c]
 
@@ -302,7 +302,7 @@ end
         function (c)
             (x = 3, y=2; z=3)
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     scope = first_scope_except_top(ast)[1]
     @test [e.name for e in scope.bounds] == [:c]
 end
@@ -317,12 +317,12 @@ end
         function()
             x .^ y
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     tp = first_scope_except_top(ast)
     scope = tp[1]
     @test length(scope.freevars) == 2
     @test Set([e.name for e in scope.freevars]) == Set([:x, :y])
-    @test @match tp[2].args[2] begin
+    @test @match tp[2].args[end] begin
         :($_ .^ $_) => true
         _ => false
     end
@@ -335,7 +335,7 @@ end
         function()
             x .= 1
         end
-    end |> solve_from_local
+    end |> solve_from_local!
     tp = first_scope_except_top(ast)
     scope = tp[1]
     @test length(scope.freevars) == 1
@@ -380,7 +380,7 @@ end
             @label x
             @goto x
         end
-    end) |> solve_from_local
+    end) |> solve_from_local!
     tp = first_scope_except_top(ast)
     scope = tp[1]
     @test isempty(scope.bounds)
@@ -389,9 +389,29 @@ end
     ast = macroexpand(@__MODULE__(), quote
         @inline function ()
         end
-    end) |> solve_from_local
+    end) |> solve_from_local!
     tp = first_scope_except_top(ast)
     scope = tp[1]
     @test isempty(scope.bounds)
     @test isempty(scope.freevars)
+end
+
+@testset "depwarn" begin
+    a = @test_deprecated solve(:(
+        function z(x, k = 1)
+            x + 20 + a + k
+        end
+    ))
+    @test any(x -> x.name == :k, get_fn_scope(a).bounds)
+
+    a = @test_deprecated solve_from_local(quote
+        x  = 1
+        y  = 2
+        .^ = 2
+        function z()
+               x .^ y
+        end
+    end)
+    scope = first_scope_except_top(a)[1]
+    @test length(scope.freevars) == 2
 end
