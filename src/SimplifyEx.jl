@@ -1,13 +1,18 @@
 using MLStyle
 
+_wrap_block(ex::Expr) = ex
+_wrap_block(o) = Expr(:block, o)
+_simplify_block(ex) = _wrap_block(simplify_ex(ex))
+
+
 function simplify_ex(ex::Expr)
     @match ex begin
         Expr(:for, Expr(:block, assigns...), body) =>
-            foldr(assigns, init=simplify_ex(body)) do ass, last
+            foldr(assigns, init=_simplify_block(body)) do ass, last
                 Expr(:for, simplify_ex(ass), last)
             end
         Expr(:let, Expr(:block, assigns...), body) =>
-            foldr(assigns, init=simplify_ex(body)) do ass, last
+            foldr(assigns, init=_simplify_block(body)) do ass, last
                 Expr(:let, simplify_ex(ass), last)
             end
         Expr(:(=), lhs && Expr(:call, _...), rhs) =>
