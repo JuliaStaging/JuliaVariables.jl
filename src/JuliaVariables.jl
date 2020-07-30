@@ -6,7 +6,7 @@ export solve_from_local, solve_from_local!, solve, solve!, simplify_ex
 using NameResolution
 using Base.Enums
 using MLStyle
-@use UppercaseCapturing
+
 IdDict = Base.IdDict
 Analyzer = NameResolution.Analyzer
 
