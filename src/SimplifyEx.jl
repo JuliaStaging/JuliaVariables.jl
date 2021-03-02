@@ -11,6 +11,8 @@ function simplify_ex(ex::Expr)
             foldr(assigns, init=_simplify_block(body)) do ass, last
                 Expr(:for, simplify_ex(ass), last)
             end
+        Expr(:let, Expr(:block), body) =>
+            Expr(:let, Expr(:block), _simplify_block(body))
         Expr(:let, Expr(:block, assigns...), body) =>
             foldr(assigns, init=_simplify_block(body)) do ass, last
                 Expr(:let, simplify_ex(ass), last)

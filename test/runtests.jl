@@ -415,3 +415,11 @@ end
     scope = first_scope_except_top(a)[1]
     @test length(scope.freevars) == 2
 end
+
+@testset "#23: simplify_ex handling empty let binding" begin
+    ex = :(let
+        x = 1
+    end) |> simplify_ex
+    @test Meta.isexpr(ex, :let)
+    @test ex.args[1] == Expr(:block)
+end
