@@ -1,9 +1,9 @@
 # JuliaVariables
 
-[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://thautwarm.github.io/JuliaVariables.jl/stable)
-[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://thautwarm.github.io/JuliaVariables.jl/dev)
-[![Build Status](https://travis-ci.com/thautwarm/JuliaVariables.jl.svg?branch=master)](https://travis-ci.com/thautwarm/JuliaVariables.jl)
-[![Codecov](https://codecov.io/gh/thautwarm/JuliaVariables.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/thautwarm/JuliaVariables.jl)
+[![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://JuliaStaging.github.io/JuliaVariables.jl/stable)
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://JuliaStaging.github.io/JuliaVariables.jl/dev)
+[![Build Status](https://travis-ci.com/JuliaStaging/JuliaVariables.jl.svg?branch=master)](https://travis-ci.com/thautwarm/JuliaVariables.jl)
+[![Codecov](https://codecov.io/gh/JuliaStaging/JuliaVariables.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/thautwarm/JuliaVariables.jl)
 
 
 About
