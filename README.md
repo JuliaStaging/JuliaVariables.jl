@@ -142,11 +142,11 @@ that of `:(j = J)`, and `:(j=J)`'s scope in inherited from that of `:(i=I)`, whi
 
 Not only due to the uselessness of scoping the messy ASTs like `for i in I, j in J; body end`, the analyses for them are also much more ugly to implement than those of the *simplified* expressions. Finally, I give up doing this.
 
-If you have understand the above concerns and made
+If you have understood the above concerns and made
 sure it's safe to return a restructured expression after injecting scope information, you can compose
 `simplify_ex` and `solve` to gain a more handy API:
 
 ```julia
-mysolve = solve ∘ simplify_ex
-mysolve_from_local = solve_from_local ∘ simplify_ex
+mysolve! = solve! ∘ simplify_ex
+mysolve_from_local! = solve_from_local! ∘ simplify_ex
 ```
