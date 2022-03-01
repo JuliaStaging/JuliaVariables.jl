@@ -59,6 +59,7 @@ SymRef(sym::Symbol, ana::Union{Nothing, Analyzer}) = SymRef(sym, ana, false)
 
 struct Var
     name::Symbol
+    unique_id::Symbol
     is_mutable::Bool
     is_shared::Bool
     is_global::Bool
@@ -135,6 +136,7 @@ function solve!(ast; toplevel=true)
     PHYSICAL = true
     PSEUDO = false
     IS_BOUND_INIT = Ref(false)
+    id = Dict{Symbol, Int}()
 
     @nospecialize
     function LHS(ex)
@@ -442,7 +444,9 @@ function solve!(ast; toplevel=true)
         end
 
     function local_var_to_var(var::LocalVar)::Var
-        Var(var.sym, var.is_mutable[], var.is_shared[], false)
+        unique_id = Symbol(var.sym, "_", id[var.sym])
+        @show unique_id # Remove after demo
+        Var(var.sym, unique_id, var.is_mutable[], var.is_shared[], false)
     end
 
     function to_symref(ex::Expr)
@@ -477,6 +481,7 @@ function solve!(ast; toplevel=true)
     end
 
     function from_symref(s::SymRef)
+        id[s.sym] = get(id, s.sym, 0) + 1
         s.as_non_sym && return s.sym
         s.ana === nothing && return Var(s.sym, true, true, true)
         var = s.ana.solved[s.sym]
