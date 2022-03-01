@@ -483,9 +483,9 @@ function solve!(ast; toplevel=true)
     function from_symref(s::SymRef)
         id[s.sym] = get(id, s.sym, 0) + 1
         s.as_non_sym && return s.sym
-        s.ana === nothing && return Var(s.sym, true, true, true)
+        s.ana === nothing && return Var(s.sym, s.sym, true, true, true)
         var = s.ana.solved[s.sym]
-        var isa Symbol && return Var(var, true, true, true)
+        var isa Symbol && return Var(var, var, true, true, true)
         local_var_to_var(var)
     end
 
