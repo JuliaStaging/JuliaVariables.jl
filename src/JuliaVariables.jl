@@ -59,7 +59,7 @@ SymRef(sym::Symbol, ana::Union{Nothing, Analyzer}) = SymRef(sym, ana, false)
 
 struct Var
     name::Symbol
-    unique_id::Symbol
+    unique_id:: Union{Ref{Bool}, Nothing}  # nothing when it's a global variable
     is_mutable::Bool
     is_shared::Bool
     is_global::Bool
@@ -444,8 +444,7 @@ function solve!(ast; toplevel=true)
         end
 
     function local_var_to_var(var::LocalVar)::Var
-        unique_id = Symbol(var.sym, "_", id[var.sym])
-        @show unique_id # Remove after demo
+        unique_id = var.is_shared
         Var(var.sym, unique_id, var.is_mutable[], var.is_shared[], false)
     end
 
@@ -483,9 +482,9 @@ function solve!(ast; toplevel=true)
     function from_symref(s::SymRef)
         id[s.sym] = get(id, s.sym, 0) + 1
         s.as_non_sym && return s.sym
-        s.ana === nothing && return Var(s.sym, s.sym, true, true, true)
+        s.ana === nothing && return Var(s.sym, nothing, true, true, true)
         var = s.ana.solved[s.sym]
-        var isa Symbol && return Var(var, var, true, true, true)
+        var isa Symbol && return Var(var, nothing, true, true, true)
         local_var_to_var(var)
     end
 
